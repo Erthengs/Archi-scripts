@@ -1,0 +1,128 @@
+﻿/*
+ * Link Concept to View - Native Nesting Fix
+ * This version creates the link on the view, then reparents (nests) 
+ * it directly into the selected element using local coordinates.
+ */
+
+console.show();
+console.clear();
+
+// --- Initialization ---
+if (typeof Java == 'undefined') { 
+    var Java, shell; 
+}
+
+const SWT = Java.type('org.eclipse.swt.SWT');
+const TreeWidget = Java.type('org.eclipse.swt.widgets.Tree');
+const TreeItem = Java.type('org.eclipse.swt.widgets.TreeItem');
+const Composite = Java.type('org.eclipse.swt.widgets.Composite');
+const GridDataFactory = Java.type('org.eclipse.jface.layout.GridDataFactory');
+const GridLayoutFactory = Java.type('org.eclipse.jface.layout.GridLayoutFactory');
+const TitleAreaDialog = Java.type("org.eclipse.jface.dialogs.TitleAreaDialog");
+
+const ConfigDialog = Java.extend(TitleAreaDialog);
+
+// --- Tree Building Helpers ---
+function buildTree(thisFolder, theParent) {
+    $(thisFolder).children("folder").forEach(function(f) {
+        let node = new TreeItem(theParent, 0);
+        node.setText(f.name);
+        buildTree(f, node);
+    });
+    $(thisFolder).children("view").forEach(function(v) {
+        let node = new TreeItem(theParent, 0);
+        node.setText(v.name);
+        node.setData("id", v.id);
+    });
+}
+
+function getChecked(item) {
+    var checked = "";
+    var children = item.getItems();
+    for (var i = 0; i < children.length; i++) {
+        if (children[i].getChecked()) {
+            checked += "," + children[i].getData("id");
+        }
+        checked += getChecked(children[i]);
+    }
+    return checked;
+}
+
+// --- Dialog Configuration ---
+let cfgDialog = {
+    config: { selectedViews: "" },
+    widgets: {},
+    open: function() { 
+        return (this.newDialog.open() == 0); 
+    },
+    newDialog: new ConfigDialog(shell) {
+        create: function() {
+            Java.super(cfgDialog.newDialog).create();
+            cfgDialog.newDialog.setTitle("Link Element to View");
+        },
+        createDialogArea: function(parent) {
+            let area = Java.super(cfgDialog.newDialog).createDialogArea(parent);
+            let container = new Composite(area, SWT.NONE);
+            GridLayoutFactory.swtDefaults().numColumns(1).margins(10, 10).applyTo(container);
+            GridDataFactory.fillDefaults().grab(true, true).hint(600, 400).applyTo(container);
+            
+            let tree = new TreeWidget(container, SWT.CHECK | SWT.BORDER | SWT.V_SCROLL);
+            cfgDialog.widgets.viewTreeWidget = tree;
+            GridDataFactory.fillDefaults().grab(true, true).applyTo(tree);
+            
+            $("folder.Views").forEach(function(f) {
+                let root = new TreeItem(tree, 0);
+                root.setText(f.name);
+                buildTree(f, root);
+                root.setExpanded(true);
+            });
+            return container;
+        },
+        okPressed: function() {
+            cfgDialog.config.selectedViews = getChecked(cfgDialog.widgets.viewTreeWidget);
+            Java.super(cfgDialog.newDialog).okPressed();
+        }
+    }
+};
+
+// --- Core Link Logic ---
+function insertReferences(selectedViews) {
+    var ids = selectedViews.split(",");
+    var targetId = ids.length > 1 ? ids[1] : ids[0];
+    var targetView = $("#" + targetId).first();
+    var list = $(selection);
+
+    list.each(function(theConcept) {
+        if (!theConcept.bounds) return;
+
+        // 1. Get the element's width and height (with fallbacks if default size)
+        var w = theConcept.bounds.width > 0 ? theConcept.bounds.width : 120;
+        var h = theConcept.bounds.height > 0 ? theConcept.bounds.height : 55;
+
+        // 2. Calculate coordinates purely relative to the element's bottom-right corner
+        var relX = w - 30;
+        var relY = h - 30;
+
+        try {
+            // 3. Create the view reference on the diagram first (this builds the object)
+            var viewRef = theConcept.view.createViewReference(targetView, 0, 0, 30, 30, true);
+            
+            // 4. THE FIX: Nest the new reference directly into the selected element using local X/Y
+            theConcept.add(viewRef, relX, relY);
+            
+            // 5. Apply the transparent formatting
+            viewRef.opacity = 0;
+            viewRef.outlineOpacity = 0;
+            viewRef.labelExpression = " ";
+            
+            console.log("Success: Linked to " + theConcept.name);
+        } catch (err) {
+            console.error("Failed to link " + theConcept.name + ": " + err);
+        }
+    });
+}
+
+// Start Script
+if (cfgDialog.open()) {
+    insertReferences(cfgDialog.config.selectedViews);
+}

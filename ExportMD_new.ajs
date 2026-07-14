@@ -1,0 +1,433 @@
+﻿/*
+ * Export2Markdown
+ * Exports the selected Main View and optionally any views explicitly embedded 
+ * inside ArchiMate elements within that view.
+ * 
+ * Includes a Master Index and avoids views embedded in Groups/Notes 
+ * or placed directly on the root canvas.
+ */
+
+var debug = true;
+var embed = false;
+var tocMap = {}; 
+var bodyMap = {}; 
+var docLines = [];
+var tocLines = [];
+
+// --- 1. Load Java SWT and JFace UI Components ---
+if (typeof Java == null) {
+    var Java;
+    var shell;
+}
+
+const SWT = Java.type('org.eclipse.swt.SWT');
+const LabelWidget = Java.type('org.eclipse.swt.widgets.Label');
+const CompositeWidget = Java.type('org.eclipse.swt.widgets.Composite');
+const ButtonWidget = Java.type('org.eclipse.swt.widgets.Button');
+const GridDataFactory = Java.type('org.eclipse.jface.layout.GridDataFactory');
+const GridLayoutFactory = Java.type('org.eclipse.jface.layout.GridLayoutFactory');
+const IMessageProvider = Java.type('org.eclipse.jface.dialogs.IMessageProvider');
+const TitleAreaDialog = Java.type("org.eclipse.jface.dialogs.TitleAreaDialog");
+
+// Create extended Java class for the configuration dialog
+const ConfigDialog = Java.extend(TitleAreaDialog);
+
+// --- 2. Define Configuration Logic and Layout ---
+let exportCfgDialog = {
+    // Default export configuration values
+    config: {
+        includeHeaders: true,
+        includeNotes: true,
+        includeRelations: true,
+        exportLinkedViews: true
+    },
+    widgets: {},
+    
+    // Helper to generate UI widgets dynamically
+    createWidget: function (name, widgetClass, c, label, init, flags) {
+        flags = flags || SWT.BORDER;
+        if (label != null) {
+            let txt = new LabelWidget(c, SWT.NONE);
+            txt.setText(label);
+            GridDataFactory.fillDefaults().align(SWT.LEFT, SWT.CENTER).applyTo(txt);
+        }
+        let widget = new widgetClass(c, flags);
+        if (init != null) init(widget);
+        if (name != null) this.widgets[name] = widget;
+    },
+    
+    // Save UI state to config variables
+    saveInput: function () {
+        this.config.includeHeaders = this.widgets.checkHeaders.getSelection();
+        this.config.includeNotes = this.widgets.checkNotes.getSelection();
+        this.config.includeRelations = this.widgets.checkRelations.getSelection();
+        this.config.exportLinkedViews = this.widgets.checkLinkedViews.getSelection();
+        return true;
+    },
+    
+    // Inline Nashorn extension to build the visual dialog 
+    dialogImpl: new ConfigDialog(shell) {
+        create: function () {
+            Java.super(exportCfgDialog.dialogImpl).create();
+            exportCfgDialog.dialogImpl.setTitle("Markdown Export Options");
+            exportCfgDialog.dialogImpl.setMessage("Select the components to include in your export.", IMessageProvider.INFORMATION);
+        },
+        createDialogArea: function (parent) {
+            let area = Java.super(exportCfgDialog.dialogImpl).createDialogArea(parent);
+            
+            // Define the layout container
+            let container = new CompositeWidget(area, SWT.NONE);
+            GridDataFactory.swtDefaults().align(SWT.FILL, SWT.BEGINNING).hint(400, 180).applyTo(container);
+            GridLayoutFactory.swtDefaults().numColumns(2).margins(15, 15).spacing(10, 10).applyTo(container);
+
+            // Generate the boolean checkboxes
+            exportCfgDialog.createWidget("checkHeaders", ButtonWidget, container, "Include Headers (Header, Changelog, etc.)", 
+                (w) => { w.setSelection(exportCfgDialog.config.includeHeaders); }, SWT.CHECK);
+
+            exportCfgDialog.createWidget("checkNotes", ButtonWidget, container, "Include Notes (Outside Headers)", 
+                (w) => { w.setSelection(exportCfgDialog.config.includeNotes); }, SWT.CHECK);
+
+            exportCfgDialog.createWidget("checkRelations", ButtonWidget, container, "Include Relationships", 
+                (w) => { w.setSelection(exportCfgDialog.config.includeRelations); }, SWT.CHECK);
+                
+            exportCfgDialog.createWidget("checkLinkedViews", ButtonWidget, container, "Export Linked Views", 
+                (w) => { w.setSelection(exportCfgDialog.config.exportLinkedViews); }, SWT.CHECK);
+
+            return area;
+        },
+        okPressed: function() {
+            if (exportCfgDialog.saveInput()) {
+                Java.super(exportCfgDialog.dialogImpl).okPressed();
+            }
+        }
+    },
+    
+    open: function() {
+        return (this.dialogImpl.open() === 0); // Returns true if OK (0) is pressed
+    }
+};
+
+// --- 3. Execute Selection & Setup Options ---
+console.show();
+console.clear();
+
+if (!exportCfgDialog.open()) {
+    console.log("Export cancelled by user.");
+    exit();
+}
+
+var includeHeaders = exportCfgDialog.config.includeHeaders;
+var includeNotes = exportCfgDialog.config.includeNotes;
+var includeRelations = exportCfgDialog.config.includeRelations;
+var exportLinkedViews = exportCfgDialog.config.exportLinkedViews;
+
+// --- 4. Core Export Functions ---
+
+// Helper function to check if an element is part of a standard header
+function isHeaderComponent(obj) {
+    var current = obj;
+    while (current) {
+        var isGroupType = $(current).is("group") || $(current).is("diagram-model-group");
+        var name = current.name;
+        if (isGroupType && (name === "Header" || name === "Changelog" || name === "Links" || name === "Logo")) {
+            return true;
+        }
+        var parentColl = $(current).parent();
+        current = parentColl ? parentColl.first() : null;
+        
+        // Stop checking if we reach the root view level
+        if (!current || $(current).is("archimate-diagram-model")) {
+            break;
+        }
+    }
+    return false;
+}
+
+function getFilteredChildren(element) {
+    var children = $(element).children().not("relationship");
+    var filtered = [];
+    
+    children.each(function(child) {
+        var isGroup = $(child).is("group") || $(child).is("diagram-model-group");
+        var isNote = $(child).is("note") || $(child).is("diagram-model-note");
+        
+        if (isHeaderComponent(child)) {
+            // Evaluates header elements (and all notes inside them)
+            if (includeHeaders) filtered.push(child);
+        } else if (isNote || isGroup) {
+            // Evaluates standard notes and custom groups outside the header
+            if (includeNotes) filtered.push(child);
+        } else {
+            // All other standard ArchiMate elements
+            filtered.push(child);
+        }
+    });
+    
+    return $(filtered);
+}
+
+function convertToText(type) {
+    var parts = type.replace(/-/g, " ").split(" ");
+    var res = "";
+    for (var i = 0; i < parts.length; i++) {
+        res += parts[i].charAt(0).toUpperCase() + parts[i].slice(1) + " ";
+    }
+    return res.trim();
+}
+
+function escapeMD(str) {
+    if (!str) return "";
+    var res = str.replace(/</g, "&lt;").replace(/\n>/g, "\n~QUOTE~");
+    res = res.charAt(0) + res.slice(1).replace(/>/g, "&gt;").replace(/~QUOTE~/g, ">");
+    return res;
+}
+
+function generateLink(str) {
+    var clean = str.toLowerCase().replace(/[\[\]\(\)\#\\\/\"]/gi, "");
+    clean = clean.replace(/ /g, "-").replace(/\</g, "lt").replace(/\>/g, "gt");
+    return "#" + clean;
+}
+
+function toc(d, element) {
+    getFilteredChildren(element).each(function(e) {
+        if (e.name && e.name.trim() !== "") {
+            var indent = "";
+            for (var i = 0; i < d; i++) { indent += "  "; }
+
+            var theHash = generateLink(e.name + " (" + convertToText(e.type) + ")");
+
+            if (!tocMap[theHash]) { tocMap[theHash] = 1; }
+            else { tocMap[theHash]++; }
+
+            var suffix = "";
+            var cleanSuffix = "";
+            if (tocMap[theHash] > 1) {
+                suffix = "-" + tocMap[theHash];
+                cleanSuffix = " " + tocMap[theHash];
+            }
+
+            // Omit element type from the text, but keep it in the anchor hash
+            tocLines.push(indent + "* [" + escapeMD(e.name) + cleanSuffix + "](" + theHash + suffix + ")");
+
+            if (getFilteredChildren(e).length > 0) {
+                toc(d + 1, e);
+            }
+        }
+    });
+}
+
+function propertiesTable(element) {
+    var props = element.prop();
+    if (!props || props.length === 0) return "";
+    var hdr = "";
+    var line = "";
+    var body = "";
+    for (var i = 0; i < props.length; i++) {
+        hdr += "|" + props[i];
+        line += "|---";
+        body += "|" + element.prop(props[i]);
+    }
+    return "**Kenmerken**\n" + hdr + "|\n" + line + "|\n" + body + "|\n";
+}
+
+function documentRelationships(element) {
+    var rels = $(element).outRels();
+    if (!rels || rels.length === 0) return "";
+
+    var lines = [];
+    lines.push("**Relationships**");
+    lines.push("|From|Relationship|To|Name|Description|");
+    lines.push("|---|---|---|---|---|");
+
+    rels.each(function(r) {
+        var q = r.concept;
+        if (r.type !== "diagram-model-connection") {
+            var tType = convertToText(r.target.type);
+            var tHash = generateLink(r.target.name + " (" + tType + ")");
+
+            var row = "|" + r.source.name + "|" + convertToText(r.type);
+            if (q.accessType) { row += " (" + q.accessType + ")"; }
+            if (q.influenceStrength) { row += " (" + q.influenceStrength + ")"; }
+
+            // Omit target element type from text, keep in anchor link
+            row += "|[" + escapeMD(r.target.name) + "](" + tHash + ")|" + (r.name || "") + "|" + (r.documentation || "") + "|";
+            lines.push(row);
+        }
+    });
+
+    if (lines.length > 3) {
+        return lines.join("\n") + "\n";
+    }
+    return "";
+}
+
+function nestedDocumentation(d, element) {
+    getFilteredChildren(element).each(function(e) {
+        if (e.name && e.name.trim() !== "") {
+            var depth = "##";
+            for (var i = 0; i < d; i++) { depth += "#"; }
+
+            var theHash = generateLink(e.name + " (" + convertToText(e.type) + ")");
+
+            if (!bodyMap[theHash]) { bodyMap[theHash] = 1; }
+            else { bodyMap[theHash]++; }
+
+            var suffix = "";
+            if (bodyMap[theHash] > 1) { suffix = " " + bodyMap[theHash]; }
+
+            docLines.push("");
+            // Omit element type from the header
+            docLines.push(depth + " " + escapeMD(e.name) + suffix);
+
+            var pTable = propertiesTable(e);
+            if (pTable !== "") {
+                docLines.push("");
+                docLines.push(escapeMD(pTable));
+            }
+
+            if (includeRelations) {
+                var rTable = documentRelationships(e);
+                if (rTable !== "") {
+                    docLines.push("");
+                    docLines.push(escapeMD(rTable));
+                }
+            }
+
+            if (e.documentation) {
+                docLines.push("");
+                docLines.push(escapeMD(e.documentation));
+            }
+
+            // Relationship text extraction (Applies globally based on user preference)
+            if (includeHeaders || includeNotes) {
+                $(e).rels().ends().each(function(r) {
+                    if (r.text) {
+                        docLines.push("");
+                        docLines.push("> " + escapeMD(r.text).replace(/\n/g, "\n> "));
+                    }
+                });
+            }
+
+            if (debug) {
+                console.log(e.name + ": Processed successfully.");
+            }
+            
+            if (getFilteredChildren(e).length > 0) {
+                nestedDocumentation(d + 1, e);
+            }
+        }
+    });
+}
+
+// --- 5. Main Execution ---
+console.log("Export All to Markdown");
+
+var theView = $(selection).filter("archimate-diagram-model").first();
+
+if (theView) {
+    var viewsToExport = [theView];
+    
+    $(theView).find("diagram-model-reference").each(function(vRef) {
+        var parentObj = $(vRef).parent();
+        
+        // Ensure parent is an actual ArchiMate element 
+        // (excludes root canvas, groups, and notes)
+        if (parentObj && parentObj.is("element")) {
+            var referencedView = vRef.refView || $(vRef).prop("refView");
+            
+            // Checks if user checked "Export Linked Views"
+            if (exportLinkedViews && referencedView && viewsToExport.indexOf(referencedView) === -1) {
+                viewsToExport.push(referencedView);
+                console.log("> Found embedded view: " + referencedView.name);
+            }
+        }
+    });
+
+    // Generate Master Index
+    docLines.push("# Index of Diagrams");
+    for (var i = 0; i < viewsToExport.length; i++) {
+        var idxName = viewsToExport[i].name || "Unnamed View";
+        docLines.push("* [" + escapeMD(idxName) + "](" + generateLink(idxName) + ")");
+    }
+    docLines.push("");
+    docLines.push("---");
+    docLines.push("");
+
+    // Tracking images to append links at the end of the markdown file
+    var imagePaths = []; 
+
+    // Loop and document all collected views
+    for (var v = 0; v < viewsToExport.length; v++) {
+        var currentView = viewsToExport[v];
+        var vName = currentView.name || "Unnamed View";
+
+        docLines.push("# " + escapeMD(vName));
+        
+        // Reset the Table of Contents array for this specific view
+        tocLines = ["* [Introduction](#intro-" + v + ")"];
+        toc(0, currentView);
+
+        docLines.push("");
+        docLines.push(tocLines.join("\n"));
+
+        // Explicit anchor to avoid conflicts across multiple diagrams
+        docLines.push("");
+        docLines.push("## Introduction <a id=\"intro-" + v + "\"></a>");
+
+        if (currentView.documentation && currentView.documentation.trim() !== "") {
+            docLines.push("");
+            docLines.push(currentView.documentation);
+        }
+
+        if (embed === true) {
+            var b64 = $.model.renderViewAsBase64(currentView, "PNG", {scale: 2, margin: 10});
+            docLines.push("");
+            docLines.push("![" + escapeMD(vName) + "](data:image/png;base64," + b64 + ")");
+        } else {
+            docLines.push("");
+            docLines.push("![" + escapeMD(vName) + "][embedView_" + v + "]");
+            imagePaths.push({ id: v, view: currentView });
+        }
+
+        nestedDocumentation(0, currentView);
+        
+        // Visual separator between views
+        docLines.push("");
+        docLines.push("---");
+        docLines.push("");
+    }
+
+    var defName = theView.name ? model.name + "-" + theView.name + "_All.md" : "Exported_Views.md";
+    var exportFile = window.promptSaveFile({ title: "Export to Markdown", filterExtensions: [ "*.md" ], fileName: defName });
+
+    if (exportFile != null) {
+        
+        // Process images externally if not embedded Base64
+        if (!embed) {
+            for (var k = 0; k < imagePaths.length; k++) {
+                var imgData = imagePaths[k];
+                var cleanVName = imgData.view.name.replace(/[\\/:*?"<>|]/g, "_");
+                
+                // Creates a unique png for each view next to the md file
+                var imgPath = exportFile.substring(0, exportFile.length - 3) + "-" + cleanVName + ".png";
+                var relPath = imgPath.replace(/^.*[\\\/]/, '').replace(/ /g, "%20");
+                
+                var bytes = $.model.renderViewAsBase64(imgData.view, "PNG", {scale: 2, margin: 10});
+                $.fs.writeFile(imgPath, bytes, "BASE64");
+                
+                docLines.push("[embedView_" + imgData.id + "]: " + relPath);
+            }
+        }
+
+        docLines.push("");
+        docLines.push("Generated: " + new Date().toLocaleString());
+
+        $.fs.writeFile(exportFile, docLines.join("\n"));
+        console.log("> Export successfully finished!");
+        
+    } else {
+        console.log("> Export cancelled by user.");
+    }
+} else {
+    console.log("> Please Select a View before running the script.");
+}

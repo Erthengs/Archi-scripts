@@ -1,0 +1,188 @@
+﻿/*
+ * Export To CSV
+ * 
+ * Requires jArchi – https://www.archimatetool.com/blog/2018/07/02/jarchi/
+ * Requires PapaParse – https://www.papaparse.com/
+ * Works with Import from CSV script – https://gist.github.com/smileham/1e57a5946235e780dee5a824f664aa3d
+ * 
+ * Version 1: Export to CSV
+ * Version 1.1: Avoid duplicate concepts exported from diagram
+ * Version 1.2: Fix missing properties
+ * Version 2: Updated to export Relationships to additional CSV
+ * Version 2.1: Added error check for View.
+ * Version 2.2: Added support for Specialization
+ * Version 2.3: Added UTF-8 BOM to (hopefully) fix Excel export
+ * Version 2.4: Added support for relationship properties export (by @isalew)
+ * Versiob 2.5 Version 3.0: Updated to support selections from both Tree and Diagrams
+ * (c) 2018 Steven Mileham
+ *
+/*
+ * Export To CSV (Selection Aware)
+ * * Requires jArchi – https://www.archimatetool.com/blog/2018/07/02/jarchi/
+ * Requires PapaParse – https://www.papaparse.com/
+ * * Version 3.4: Fixed "length" null error by adding explicit concept validation.
+ */
+
+console.show();
+console.clear();
+console.log("> Starting CSV Export");
+
+// Load PapaParse library
+const Papa = require(__DIR__ + ".modules/lib/papaparse.min.js");
+var debug = false;
+var propertiesList = [];
+var relationPropertiesList = [];
+var conceptHashMap = [];
+
+var conceptHeaders = ["Name", "Documentation", "UID", "Type", "Specialization"];
+var relationshipHeaders = [
+    "Relationship ID", "From Name", "From Type", "Relationship Type", 
+    "Specialization", "To Name", "To Type", "Relationship Name", "Relationship Documentation"
+];
+
+var typeMappings = {
+    "access-relationship":"Accesses",
+    "composition-relationship":"Comprises",
+    "flow-relationship":"Flows to",
+    "realization-relationship":"Realises",
+    "assignment-relationship":"Assigned to",
+    "serving-relationship":"Serves/Used By",
+    "association-relationship":"Associated to",
+    "aggregation-relationship":"Aggregates"
+};
+
+var theData = new Array();
+var theRelationshipData = new Array();
+
+// --- Selection Logic ---
+var selectedView = $(selection).filter("archimate-diagram-model").first();
+var selectedElements = $(selection).filter("element");
+var selectedRelationships = $(selection).filter("relationship");
+
+var elementsToProcess = null;
+var fileNamePrefix = "";
+
+if (selectedView && selectedView.length > 0) {
+    elementsToProcess = $(selectedView).find().not("relationship");
+    fileNamePrefix = (model.name ? model.name : "Model") + "-" + selectedView.name;
+    console.log("> Exporting from View: " + selectedView.name);
+} else if (selectedElements && selectedElements.length > 0) {
+    elementsToProcess = selectedElements;
+    fileNamePrefix = (model.name ? model.name : "Model") + "-Selection";
+    console.log("> Exporting " + selectedElements.length + " selected elements.");
+}
+
+// --- Main Processing ---
+if (elementsToProcess && elementsToProcess.length > 0) {
+    elementsToProcess.each(function(e) {
+        var theConcept = getConcept(e);
+
+        // Validation: Ensure theConcept exists and is an ArchiMate concept (has an ID)
+        if (theConcept && theConcept.id && !conceptHashMap[theConcept.id]) {
+            try {
+                conceptHashMap[theConcept.id] = true;
+
+                var theProperties = theConcept.prop();
+                theProperties.forEach(function(propName) {
+                    if (propertiesList.indexOf(propName) === -1) {
+                        propertiesList.push(propName);
+                        conceptHeaders.push(propName);
+                    }
+                });
+
+                var theObject = {
+                    "Name": theConcept.name || "",
+                    "Documentation": theConcept.documentation || "",
+                    "UID": theConcept.id,
+                    "Type": theConcept.type,
+                    "Specialization": theConcept.specialization || ""
+                };
+
+                propertiesList.forEach(function(propName) {
+                    var val = theConcept.prop(propName);
+                    if (val !== null && val !== undefined) {
+                        theObject[propName] = "" + val;
+                    }
+                });
+
+                theData.push(theObject);
+
+                $(e).outRels().each(function(r) {
+                    processRelationship(r);
+                });
+            } catch (error) {
+                if(debug) console.log("> Skipping: " + e + " (" + error + ")");
+            }
+        }
+    });
+
+    selectedRelationships.each(function(r) {
+        processRelationship(getConcept(r));
+    });
+
+    saveFiles();
+} else {
+    window.alert("Please select a View or elements in the tree/diagram.");
+}
+
+// --- Helpers ---
+
+function getConcept(o) {
+    if (!o) return null;
+    return o.concept ? o.concept : o;
+}
+
+function processRelationship(r) {
+    var rel = getConcept(r);
+    if (!rel || !rel.id || conceptHashMap["rel-" + rel.id]) return; 
+    conceptHashMap["rel-" + rel.id] = true;
+
+    var relRow = {
+        "Relationship ID": rel.id,
+        "From Name": rel.source ? rel.source.name : "",
+        "From Type": rel.source ? rel.source.type : "",
+        "Relationship Type": !typeMappings[rel.type] ? rel.type : typeMappings[rel.type],
+        "Specialization": rel.specialization || "",
+        "To Name": rel.target ? rel.target.name : "",
+        "To Type": rel.target ? rel.target.type : "",
+        "Relationship Name": rel.name || "",
+        "Relationship Documentation": rel.documentation || ""
+    };
+
+    var relProps = rel.prop();
+    relProps.forEach(function(p) {
+        if (relationPropertiesList.indexOf(p) === -1) {
+            relationPropertiesList.push(p);
+            relationshipHeaders.push(p);
+        }
+    });
+
+    relationPropertiesList.forEach(function(p) {
+        var val = rel.prop(p);
+        if (val !== null && val !== undefined) {
+            relRow[p] = "" + val;
+        }
+    });
+
+    theRelationshipData.push(relRow);
+}
+
+function saveFiles() {
+    var defaultFileName = fileNamePrefix ? fileNamePrefix + ".csv" : "Exported Model.csv";
+    var exportFile = window.promptSaveFile({ 
+        title: "Export to CSV", 
+        filterExtensions: ["*.csv"], 
+        fileName: defaultFileName 
+    });
+
+    if (exportFile != null) {
+        var theCSV = Papa.unparse({ fields: conceptHeaders, data: theData });
+        var theRelationshipsCSV = Papa.unparse({ fields: relationshipHeaders, data: theRelationshipData });
+
+        $.fs.writeFile(exportFile, "\ufeff" + theCSV);
+        $.fs.writeFile(exportFile.replace(".csv", "-relationships.csv"), "\ufeff" + theRelationshipsCSV);
+        console.log("> Export completed successfully.");
+    } else {
+        console.log("> Export cancelled.");
+    }
+}

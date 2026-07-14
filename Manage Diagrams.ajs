@@ -1,0 +1,1006 @@
+/*
+ * Create a header with diagram name, version, created_by, created_on, last_edited_by and last_edited_on. 
+ * These values are read from and written to the diagram properties. 
+ * Created by Werner Horlings
+ * 
+ * v1 - 2023-01-17 - Werner Horlings - Initial Concept
+ * v2 - 2023-03-17 - Steven Mileham - Combined into single script to support Create/Update View
+ * v2.1 - 2023-03-18 - Steven Mileham - Added sort function to View folder widget
+ * v2.2 - 2023-03-20 - Steven Mileham - Added support for Exclude from Report, Global Changelog and initial Config file (WIP)
+ * v2.3 - 2023-03-22 - Steven Mileham - Encorporated Clipboard Script, added basic Config Wizard
+ * v2.4 - 2023-03-23 - Steven Mileham - Added support for custom colours, fixed bug on Create, refactored formatting, split Global Changelog to User Changelog.
+ * v2.4.1 - 2023-03-23 - Stevem Mileham - Fixed bug in Create logic, Changed View Reference text position.
+ * v2.5 - 2023-03-23 - Steven Mileham - Added initial support for Logo.
+ * v2.5.1 - 2023-03-23 - Steven Mileham - Fixed bugs, replaced Logo URL with File Picker.
+ * v2.5.2 - 2023-03-26 - Steven Mileham - Added options for opacity, added option to hide Link icon, added option to change height of links.
+  * v2.5.3 - 2023-03-31 - Werner Horlings - Added coArchi support, default config setting based on existing config file, option to change view references only, option to linkify a logo, layout jface dialogs improved
+ * 
+ * Config screen made possible with script from RChevallier https://gist.github.com/rchevallier/d155527dcc3e956848a90e51bf21d7e1
+ */
+
+console.show();
+console.clear();
+headerConfig = {};
+
+function buttonDialog(message,options) {
+    var dialog = new org.eclipse.jface.dialogs.MessageDialog(shell,"Archi",null,message,3,options.concat(["Cancel"]),0);
+    
+    var result=dialog.open();
+    return result==options.length?null:(result+1).toString();
+}
+    
+function rgbToHex(r, g, b) {
+    function componentToHex(c) {
+        var hex = c.toString(16);
+        return hex.length == 1 ? "0" + hex : hex;
+    }
+
+    return "#" + componentToHex(r) + componentToHex(g) + componentToHex(b);
+}
+    
+function colorDialog() {
+    dialog = new org.eclipse.swt.widgets.ColorDialog(shell);
+    theColourRGB = dialog.open();
+    return !theColourRGB?null:rgbToHex(theColourRGB.red,theColourRGB.green,theColourRGB.blue);   
+}
+
+function getLogoFile(fileSrc) {
+    const StandardCopyOption = Java.type ('java.nio.file.StandardCopyOption');
+    const Files = Java.type ('java.nio.file.Files');
+    const FileSystems = Java.type ('java.nio.file.FileSystems');
+    var theSource = FileSystems.getDefault().getPath(fileSrc);
+    var theExtension = theSource.toString().substring(theSource.toString().lastIndexOf("."));
+    var theTarget = FileSystems.getDefault().getPath( __DIR__ + ".conf/logo"+theExtension);
+
+    Files.copy(theSource,theTarget, StandardCopyOption.REPLACE_EXISTING);
+    return theTarget.toString();
+}
+
+function configWizard(){
+	
+    headerConfig.gridSize = parseInt(window.prompt("Enter size of Archi grid (default 12)",headerConfig.gridSize));
+    headerConfig.wide=buttonDialog("Show header in Wide format or Tall?",["Wide","Tall"])=="1"?true:false;
+    headerConfig.showChangelog = buttonDialog("Show Changelog in header?",["Yes","No"])=="1"?true:false;
+	headerConfig.useCoarchi = buttonDialog("Do you use coArchi?",["Yes","No"])=="1"?true:false;
+    //headerConfig.globalChangelog=buttonDialog("Add all 'Changes' to User 'Change Log' //View?",["Yes","No"])=="1"?true:false;
+    //headerConfig.clipChangelog=buttonDialog("Update clipboard with contents of 'Change' after updating dialog?",["Yes","No"])=="1"?true:false;
+    headerConfig.linkHeight=buttonDialog("Height of Link references (in grid squares)?",["3","2"])=="1"?3:2;
+    headerConfig.showLinkIcons=buttonDialog("Show icon on links in header?",["Yes","No"])=="1"?true:false;
+    headerConfig.showLogo=buttonDialog("Show Logo in Header? (Recommended Size "+headerConfig.gridSize*5+"x"+headerConfig.gridSize*19+")",["Yes","No"])=="1"?true:false;
+    if (headerConfig.showLogo) {
+        headerConfig.logoSource =  window.promptOpenFile({ title: "Select Logo", filterExtensions: ["*.png","*.gif","*.jpg"] });
+        if (headerConfig.logoSource!=null) {
+            headerConfig.logoFile=getLogoFile(headerConfig.logoSource);
+        }
+    }
+
+    headerConfig.customColours = buttonDialog("Set custom header colours?",["Yes","No"])=="1"?true:false;
+    if (headerConfig.customColours) {
+        headerConfig.groupFillColour = window.prompt("Please choose a colour for the Header background\n(Leave blank to select via Colour picker)",headerConfig.groupFillColour);
+        if (headerConfig.groupFillColour=="") {headerConfig.groupFillColour = colorDialog();}
+        headerConfig.groupOpacity = window.prompt("Please set opacity for Header background\n(Default 255)",headerConfig.groupOpacity);
+        headerConfig.groupOutlineOpacity = window.prompt("Please set opacity for Header border\n(Default 255)",headerConfig.groupOutlineOpacity);
+
+        headerConfig.labelFillColour = window.prompt("Please choose a colour for the Label background\n(Leave blank to select via Colour picker)",headerConfig.labelFillColour);
+        if (headerConfig.labelFillColour=="") {headerConfig.labelFillColour = colorDialog();}
+        
+        headerConfig.labelFontColour = window.prompt("Please choose a colour for the Label Font\n(Leave blank to select via Colour picker)",headerConfig.labelFontColour);
+        if (headerConfig.labelFontColour=="") {headerConfig.labelFontColour = colorDialog();}
+        headerConfig.labelOpacity = window.prompt("Please set opacity for Label background\n(Default 255)",headerConfig.labelOpacity);
+        headerConfig.labelOutlineOpacity = window.prompt("Please set opacity for Label border\n(Default 255)", headerConfig.labelOutlineOpacity);
+
+        headerConfig.noteFillColour = window.prompt("Please choose a colour for the Note background\n(Leave blank to select via Colour picker)",headerConfig.noteFillColour);
+        if (headerConfig.noteFillColour=="") {headerConfig.noteFillColour = colorDialog();}
+        
+        headerConfig.noteFontColour = window.prompt("Please choose a colour for the Note Font\n(Leave blank to select via Colour picker)",headerConfig.noteFontColour);
+        if (headerConfig.noteFontColour=="") {headerConfig.noteFontColour = colorDialog();}
+        headerConfig.noteOpacity = window.prompt("Please set opacity for Note background\n(Default 255)",headerConfig.noteOpacity);
+        headerConfig.noteOutlineOpacity = window.prompt("Please set opacity for Note border\n(Default 255)",headerConfig.noteOutlineOpacity);
+
+        headerConfig.linkFillColour = window.prompt("Please choose a colour for the View Links background\n(Leave blank to select via Colour picker)",headerConfig.linkFillColour);
+        if (headerConfig.linkFillColour=="") {headerConfig.linkFillColour = colorDialog();}
+
+        headerConfig.linkFontColour = window.prompt("Please choose a colour for the View Links Font\n(Leave blank to select via Colour picker)",headerConfig.linkFontColour);
+        if (headerConfig.linkFontColour=="") {headerConfig.linkFontColour = colorDialog();}
+        headerConfig.linkOpacity = window.prompt("Please set opacity for Link background\n(Default 255)",headerConfig.linkOpacity);
+        headerConfig.linkOutlineOpacity = window.prompt("Please set opacity for Link border\n(Default 255)",headerConfig.linkOutlineOpacity);
+    }
+
+    $.fs.writeFile(__DIR__ + '.conf/header-conf.js', "const headerConfig="+JSON.stringify(headerConfig));
+}
+
+try {
+    load(__DIR__ + '.conf/header-conf.js');
+}
+catch (e) {
+    configWizard();
+}
+
+if (typeof Java == null) {
+    /**
+     * @type {{type: (s: string) => JavaClass, extend: (c: JavaClass) => JavaClass, super: (o: JavaObject) => JavaObject }} 
+     */
+    var Java
+    var shell
+}
+
+
+/** @type JavaClass */ const SWT = Java.type('org.eclipse.swt.SWT')
+/** @type JavaClass */ const LabelWidget = Java.type('org.eclipse.swt.widgets.Label')
+/** @type JavaClass */ const TextWidget = Java.type('org.eclipse.swt.widgets.Text')
+/** @type JavaClass */ const CompositeWidget = Java.type('org.eclipse.swt.widgets.Composite')
+/** @type JavaClass */ const SpinnerWidget = Java.type('org.eclipse.swt.widgets.Spinner')
+/** @type JavaClass */ const GroupWidget = Java.type('org.eclipse.swt.widgets.Group')
+/** @type JavaClass */ const ButtonWidget = Java.type('org.eclipse.swt.widgets.Button')
+/** @type JavaClass */ const GridData = Java.type('org.eclipse.swt.layout.GridData')
+/** @type JavaClass */ const GridLayout = Java.type('org.eclipse.swt.layout.GridLayout')
+/** @type JavaClass */ const GridDataFactory = Java.type('org.eclipse.jface.layout.GridDataFactory')
+/** @type JavaClass */ const GridLayoutFactory = Java.type('org.eclipse.jface.layout.GridLayoutFactory')
+/** @type JavaClass */ const RowLayoutFactory = Java.type('org.eclipse.jface.layout.RowLayoutFactory')
+/** @type JavaClass */ const RowLayout = Java.type('org.eclipse.swt.layout.RowLayout')
+/** @type JavaClass */ const IMessageProvider = Java.type('org.eclipse.jface.dialogs.IMessageProvider')
+/** @type JavaClass */ const TitleAreaDialog = Java.type("org.eclipse.jface.dialogs.TitleAreaDialog")
+
+/** @type JavaClass */ const DateTimeWidget = Java.type("org.eclipse.swt.widgets.DateTime")
+/** @type JavaClass */ const TreeWidget = Java.type("org.eclipse.swt.widgets.Tree")
+/** @type JavaClass */ const TreeItem = Java.type("org.eclipse.swt.widgets.TreeItem")
+
+const ConfigDialog = Java.extend(TitleAreaDialog)
+
+// Set up for creation of views/header/changelog
+const gridSize = headerConfig.gridSize;
+const linkHeight = gridSize * headerConfig.linkHeight;
+const linkWidth = gridSize * 17;
+const rowLimit = headerConfig.wide?8:4;
+const rowPadding = headerConfig.wide?3:1;
+const height = gridSize * 2;
+const labelWidth = gridSize * 10;
+
+let theSystem = Java.type("java.lang.System");
+var currentDate = new Date().toISOString().slice(0, 10);
+var archimateView = selection.filter("archimate-diagram-model").first();
+
+switch(""+buttonDialog("What do you want to do?", ["Create View", "Update View", "Manage Config", "Manage View Links", "Commit"])) {
+case "1":
+	theOption="New";
+    break;
+case "2":
+	theOption="Update";
+    if (!archimateView) {
+        console.error("Please select a view to update.");
+        exit();
+    }
+    break;
+case "3":
+    configWizard();
+    exit();
+    break;
+case "4":
+	theOption="onlyViewRefs";
+    break;
+case "5":
+	var logName= theSystem.getProperty("user.name") + " - Changelog";
+	var theChangeLog = $("archimate-diagram-model."+logName).first();
+	if (theChangeLog) {
+		setClipboardString(theChangeLog.documentation || "");
+		theChangeLog.documentation = "";
+	} else {
+		setClipboardString("");
+	}
+	console.log("commit")
+    exit();
+default:
+    console.log("Cancel");
+    exit();
+}
+
+function sortObj (obj1, obj2) {
+    if (obj1.name>obj2.name) return 1;
+    if (obj1.name<obj2.name) return -1;
+    return 0;
+}
+
+function buildTree(thisFolder, theParent, theSelectedViews){
+    var theFolders = [];
+    $(thisFolder).children("folder").forEach(function(folder){
+        theFolders.push(folder);
+    });
+    var theSortedFolders = theFolders.sort(sortObj);
+    theSortedFolders.forEach(function (folder){
+        let theFolder = new TreeItem(theParent,0);
+        theFolder.setText(folder.name);
+        buildTree(folder, theFolder, theSelectedViews);
+        theFolder.setExpanded(true);
+    })
+    var theViews = [];
+    $(thisFolder).children("view").forEach(function(view){
+        theViews.push(view);
+    });
+    var theSortedViews = theViews.sort(sortObj);
+    theSortedViews.forEach(function (view){
+        let theChild = new TreeItem(theParent,0);
+        theChild.setText(view.name);
+        theChild.setData("id",view.id);
+        if ($(theSelectedViews).children("."+view.name).first()!=null) {
+            theChild.setChecked(true);
+        }
+    })
+}
+
+function getChecked(item, parentChecked){
+    var checked = "";
+    var children = item.getItems();
+    if (!parentChecked) {
+        parentChecked = item.getChecked();
+    }
+    if (children.length>0)
+    {   
+        for (var count=0; count<children.length; count++) {
+            checked += getChecked(children[count], parentChecked);
+        }
+    }
+    else {
+        if (parentChecked||item.getChecked()) {
+            checked += ","+item.getData("id");
+        }
+    }
+    return checked;
+}
+
+function getSelectedViews(theView) {
+    theLinkGroup = $(theView).children("diagram-model-group.Links").first();
+    return theLinkGroup;
+}
+
+function getDigits(num) {
+    return num<10?"0"+num:""+num;
+}
+
+let cfgDialog = {
+
+    /**
+     * Default values
+     */
+    config: {
+        author: theSystem.getProperty("user.name"),
+        createdDate: archimateView!=null && archimateView.prop("Created_on")!=null?archimateView.prop("Created_on"):currentDate.toString(),
+        version: archimateView!=null && archimateView.prop("Version")!=null?parseInt(archimateView.prop("Version"))+1:1,
+        editor: theSystem.getProperty("user.name"),
+        updatedDate: currentDate.toString(),
+        name: archimateView!=null?archimateView.name:"",
+        documentation: (archimateView!=null && archimateView.documentation)?archimateView.documentation:"",
+        logoLink: false,
+		hideFromExport: archimateView!=null?(archimateView.prop("_hide_from_export_")!=null?archimateView.prop("_hide_from_export_"):false):false,
+        selectedViews: ""
+    },
+    widgets: {},
+    /**
+     * Helper to create a widget
+     * 
+     * @param {string} name - The widget name
+     * @param {JavaClass} widgetClass - the Java widget class
+     * @param {JavaObject} c - The container
+     * @param {string} label - the label if any for the widget. A Label widget will be created if necessary
+     * @param {(...a: any) => void} init - a function to finalize initialisation (value, etc )
+     */
+    createWidget: function (name, widgetClass, c, label, init, flags = SWT.BORDER) {
+        if (label != null) {
+            let txt = new LabelWidget(c, SWT.NONE);
+            txt.setText(label);
+            GridDataFactory.fillDefaults().align(SWT.LEFT, SWT.TOP).applyTo(txt);
+        }
+        let widget = new widgetClass(c, flags);
+        if (init != null) init(widget);
+        // saving in widgets reference array
+        if (name != null) this.widgets[name] = widget;
+    },
+    /**
+     * as open() will destroy the widgets on close, saving values to config
+     */
+    saveInput: function (option) {
+
+        switch (option) {
+            case "New":
+				this.config.version = parseInt(this.widgets.spinVersion.getText(), 10);
+				this.config.name = this.widgets.textName.getText();
+				this.config.documentation = this.widgets.textDocumentation.getText();
+				this.config.hideFromExport = this.widgets.checkboxHideReport.getSelection();
+				this.config.author = this.widgets.textAuthor.getText();
+		        this.config.createdDate = this.widgets.dateCreatedDate.getYear() + "-"+getDigits(this.widgets.dateCreatedDate.getMonth()+1) +"-"+getDigits(this.widgets.dateCreatedDate.getDay());
+                if (this.config.author=="") {return false}
+                break;
+            case "Update":
+				this.config.version = parseInt(this.widgets.spinVersion.getText(), 10);
+				this.config.name = this.widgets.textName.getText();
+				this.config.documentation = this.widgets.textDocumentation.getText();
+				this.config.hideFromExport = this.widgets.checkboxHideReport.getSelection();
+                this.config.editor = this.widgets.textEditor.getText();
+		        this.config.updatedDate = this.widgets.dateUpdatedDate.getYear() + "-"+getDigits(this.widgets.dateUpdatedDate.getMonth()+1) +"-"+getDigits(this.widgets.dateUpdatedDate.getDay());
+                this.config.changelog = this.widgets.textChangelog.getText();
+                if (this.config.changelog=="") {return false}
+                if (this.config.editor=="") {return false}
+                break;
+			case "onlyViewRefs":
+				this.config.logoLink = this.widgets.checkboxLogolink.getSelection();
+                break;
+        }
+
+        var allItems = this.widgets.viewTreeWidget.getItems();
+
+        for (var i=0; i< allItems.length; i++) {
+            this.config.selectedViews = getChecked(allItems[i],false);
+        }
+        if (this.config.selectedViews!="") {this.config.selectedViews=this.config.selectedViews.substring(1)}
+
+        // Basic validation
+        if (this.config.name=="") {return false}
+        if (this.config.documentation=="") {return false}
+        return true;
+    },
+
+    open: function(option) {
+        switch (option) {
+            case "New":
+                return (this.newDialog.open() == 0)  // OK = 0, Cancel = 1, Closed = -1
+            case "Update":
+                return (this.updateDialog.open() == 0)  // OK = 0, Cancel = 1, Closed = -1
+			case "onlyViewRefs":							
+                return (this.updateViewRefs.open() == 0)  // OK = 0, Cancel = 1, Closed = -1
+        }
+        
+    },
+
+    // NB: Nashorn specific JS syntax! (like java anonymous function)
+    // also not possible to define anything else than inherited method to override. No new method, no property
+	//--------------------------------------------------------------------------------------------------------------------------------
+	updateViewRefs: new ConfigDialog(shell) {
+
+        create: function () {
+            Java.super(cfgDialog.updateViewRefs).create();
+            cfgDialog.updateViewRefs.setTitle("Change View References");
+            cfgDialog.updateViewRefs.setMessage("Please provide the following details", IMessageProvider.WARNING);
+        },
+
+        createDialogArea: function (parent) {
+            
+            var cfg = cfgDialog.config;
+            let area = Java.super(cfgDialog.updateViewRefs).createDialogArea(parent);
+            
+			// the area contains an horizontal sep, and a grid layout
+            let container = new CompositeWidget(area, SWT.NONE);
+            GridDataFactory.swtDefaults().align(SWT.FILL, SWT.BEGINNING).hint(800,700).applyTo(container);
+            GridLayoutFactory.swtDefaults().numColumns(2).margins(10,10).spacing(10, 5).applyTo(container);
+
+				                
+            cfgDialog.createWidget('viewTreeWidget', TreeWidget, container, "Views", 
+                (tree) => {
+                    var theSelectedViews = getSelectedViews(archimateView);
+                    $("folder.Views").forEach(function (folder){
+                        let theParent = new TreeItem(tree,0);
+                        theParent.setText(folder.name);
+                        buildTree(folder, theParent,theSelectedViews);
+                        theParent.setExpanded(true);
+                    })
+                    //tree.setItems($("view"));
+                    GridDataFactory.fillDefaults().hint(550,550).align(SWT.END, SWT.CENTER).applyTo(tree)
+                },SWT.CHECK |SWT.MULTI | SWT.BORDER | SWT.V_SCROLL | SWT.H_SCROLL)
+            cfgDialog.createWidget("checkboxLogolink", ButtonWidget, container, "Link on logo (select 1 view)",
+            (w) => {
+                w.setSelection(cfg.logoLink);
+            }, SWT.CHECK);
+           return area
+        },
+        
+        okPressed: function() {
+            if (cfgDialog.saveInput("onlyViewRefs")) {
+                Java.super(cfgDialog.updateViewRefs).okPressed();
+            }
+        }
+    },
+	//---------------------------------------------------------------------------------------------------------------    
+	
+	
+	
+	updateDialog: new ConfigDialog(shell) {
+
+        create: function () {
+            Java.super(cfgDialog.updateDialog).create();
+            cfgDialog.updateDialog.setTitle("Update View");
+            cfgDialog.updateDialog.setMessage("Please provide the following details", IMessageProvider.WARNING);
+        },
+
+        createDialogArea: function (parent) {
+            
+            var cfg = cfgDialog.config;
+            let area = Java.super(cfgDialog.updateDialog).createDialogArea(parent);
+            
+			// the area contains an horizontal sep, and a grid layout
+            let container = new CompositeWidget(area, SWT.NONE);
+            GridDataFactory.swtDefaults().align(SWT.FILL, SWT.BEGINNING).hint(800,725).applyTo(container);
+            GridLayoutFactory.swtDefaults().numColumns(4).margins(10,10).spacing(10, 5).applyTo(container);
+
+            let group = new GroupWidget(container, SWT.NONE);
+            GridDataFactory.swtDefaults().span(4,1).grab(true, false).align(SWT.FILL, SWT.FILL).applyTo(group);
+            GridLayoutFactory.swtDefaults().numColumns(2).applyTo(group);
+            group.setText("General info");
+            //Name
+            cfgDialog.createWidget('textName', TextWidget, group, "Name *", 
+                (w) => {
+                    w.setText(cfg.name);
+                    GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).grab(true,false).applyTo(w);
+                });
+            //Documentation
+            cfgDialog.createWidget('textDocumentation', TextWidget, group, "Purpose *", 
+            (w) => {
+                w.setText(cfg.documentation);
+                GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).hint(50,50).grab(true,false).applyTo(w);
+            },SWT.MULTI|SWT.BORDER|SWT.WRAP|SWT.V_SCROLL);
+
+/// new group2 
+            let group2 = new GroupWidget(container, SWT.NONE);
+            GridDataFactory.swtDefaults().span(4,1).grab(true, false).align(SWT.FILL, SWT.FILL).applyTo(group2);
+            GridLayoutFactory.swtDefaults().numColumns(4).applyTo(group2);
+            group2.setText("Details");
+			// Editor
+            cfgDialog.createWidget('textEditor', TextWidget, group2, "Editor *", 
+                (w) => {
+                    w.setText(cfg.editor);
+                    GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).grab(true, false).applyTo(w);
+                });
+
+						// last updated on
+            cfgDialog.createWidget('dateUpdatedDate', DateTimeWidget, group2, "         Updated date", 
+                (w) => {
+                    var dateArray = cfg.updatedDate.split("-");
+                    w.setDate(parseInt(dateArray[0]),parseInt(dateArray[1])-1,parseInt(dateArray[2]));
+                    GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).applyTo(w);
+                });
+				
+            // Version section
+            cfgDialog.createWidget('spinVersion', SpinnerWidget, group2, "Version nr   ", 
+                (w) => {
+                    w.setValues(cfg.version, 1, 200, 0, 1, 10);
+                    GridDataFactory.fillDefaults().hint(10,20).grab(true,false).applyTo(w);
+                });
+				
+						// checkbox hide from export
+            cfgDialog.createWidget("checkboxHideReport", ButtonWidget, group2, "         Hide from export?                      ",
+            (w) => {
+                w.setSelection(false);
+            }, SWT.CHECK),
+				
+				
+            cfgDialog.createWidget('textChangelog', TextWidget, group, "Changelog *", 
+            (w) => {
+                w.setText("");
+                GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).hint(50,50).grab(true,false).applyTo(w);
+            },SWT.MULTI|SWT.BORDER|SWT.WRAP|SWT.V_SCROLL);
+                    
+
+				
+
+                
+            cfgDialog.createWidget('viewTreeWidget', TreeWidget, container, "Linked Views", 
+                (tree) => {
+                    var theSelectedViews = getSelectedViews(archimateView);
+                    $("folder.Views").forEach(function (folder){
+                        let theParent = new TreeItem(tree,0);
+                        theParent.setText(folder.name);
+                        buildTree(folder, theParent,theSelectedViews);
+                        theParent.setExpanded(true);
+                    })
+                    //tree.setItems($("view"));
+                    GridDataFactory.fillDefaults().hint(675,350).align(SWT.END, SWT.CENTER).applyTo(tree)
+                },SWT.CHECK |SWT.MULTI | SWT.BORDER | SWT.V_SCROLL | SWT.H_SCROLL);
+
+            
+           return area
+        },
+        
+        okPressed: function() {
+            if (cfgDialog.saveInput("Update")) {
+                Java.super(cfgDialog.updateDialog).okPressed();
+            }
+        }
+    },
+
+    newDialog: new ConfigDialog(shell) {
+
+        create: function () {
+            Java.super(cfgDialog.newDialog).create();
+            cfgDialog.newDialog.setTitle("Create View");
+            cfgDialog.newDialog.setMessage("Please provide the following details", IMessageProvider.WARNING);
+        },
+
+        createDialogArea: function (parent) {
+            var cfg = cfgDialog.config;
+            let area = Java.super(cfgDialog.newDialog).createDialogArea(parent);
+            
+			// the area contains an horizontal sep, and a grid layout
+            let container = new CompositeWidget(area, SWT.NONE);
+            GridDataFactory.swtDefaults().align(SWT.FILL, SWT.BEGINNING).hint(800,700).applyTo(container);
+            GridLayoutFactory.swtDefaults().numColumns(4).margins(10,10).spacing(10, 5).applyTo(container);
+
+            let group = new GroupWidget(container, SWT.NONE);
+            GridDataFactory.swtDefaults().span(4,1).grab(true, false).align(SWT.FILL, SWT.FILL).applyTo(group);
+            GridLayoutFactory.swtDefaults().numColumns(2).applyTo(group);
+            group.setText("General info");
+            //Name
+            cfgDialog.createWidget('textName', TextWidget, group, "Name *", 
+                (w) => {
+                    w.setText("View created on " + currentDate.toString());
+                    GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).grab(true,false).applyTo(w);
+                });
+            //Documentation
+            cfgDialog.createWidget('textDocumentation', TextWidget, group, "Purpose *     ", 
+            (w) => {
+                w.setText("");
+                GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).hint(50,75).grab(true,false).applyTo(w);
+            },SWT.MULTI|SWT.BORDER|SWT.WRAP|SWT.V_SCROLL);
+            
+/// new group2 
+            let group2 = new GroupWidget(container, SWT.NONE);
+            GridDataFactory.swtDefaults().span(4,1).grab(true, false).align(SWT.FILL, SWT.FILL).applyTo(group2);
+            GridLayoutFactory.swtDefaults().numColumns(4).applyTo(group2);
+            group2.setText("Details");
+			
+
+			 // Author
+            cfgDialog.createWidget('textAuthor', TextWidget, group2, "Author *", 
+                (w) => {
+                    w.setText(cfg.author);
+                    GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).grab(true, false).applyTo(w);
+                });
+				
+			// Create Date
+            cfgDialog.createWidget('dateCreatedDate', DateTimeWidget, group2, "         Creation date", 
+                (w) => {
+                    console.log(cfg.createdDate);
+                    var dateArray = cfg.createdDate.split("-");
+                    w.setDate(parseInt(dateArray[0]),parseInt(dateArray[1])-1,parseInt(dateArray[2]));
+                    GridDataFactory.fillDefaults().align(SWT.FILL, SWT.END).applyTo(w);
+                });
+
+
+            // Version section
+            cfgDialog.createWidget('spinVersion', SpinnerWidget, group2, "Version nr    ", 
+                (w) => {
+                    w.setValues(1, 1, 200, 0, 1, 10);
+                    GridDataFactory.fillDefaults().hint(10,20).grab(true,false).applyTo(w);
+                });
+
+			// checkbox hide from export
+            cfgDialog.createWidget("checkboxHideReport", ButtonWidget, group2, "         Hide from export?                      ",
+            (w) => {
+                w.setSelection(false);
+            }, SWT.CHECK);
+
+
+            cfgDialog.createWidget('viewTreeWidget', TreeWidget, container, "Linked Views", 
+                (tree) => {
+                    $("folder.Views").forEach(function (folder){
+                        let theParent = new TreeItem(tree,0);
+                        theParent.setText(folder.name);
+                        buildTree(folder, theParent,null);
+                        theParent.setExpanded(true);
+                    })
+                    //tree.setItems($("view"));
+                    GridDataFactory.fillDefaults().hint(675,350).align(SWT.END, SWT.CENTER).applyTo(tree)
+                },SWT.CHECK |SWT.MULTI | SWT.BORDER | SWT.V_SCROLL | SWT.H_SCROLL)
+
+            
+           return area
+        },
+        
+        okPressed: function() {
+            if (cfgDialog.saveInput("New")) {
+                Java.super(cfgDialog.newDialog).okPressed();
+            }
+        }
+    }
+}
+
+function manageDiagram(option) {
+    console.log(option);
+    console.log("Please Wait...")
+    switch (option) {
+        case "New":
+            var OK = cfgDialog.open("New")
+            console.log(OK, '=>\n', cfgDialog.config)
+            if (OK) {newDiagram(cfgDialog.config);}
+            break;
+        case "Update":
+            var OK = cfgDialog.open("Update")
+            console.log(OK, '=>\n', cfgDialog.config)
+            if (OK) {updateDiagram (cfgDialog.config);}
+            break;
+		 case "onlyViewRefs":
+            var OK = cfgDialog.open("onlyViewRefs")
+            console.log(OK, '=>\n', cfgDialog.config)
+            if (OK) {updateViewRefs (cfgDialog.config);}
+            break;
+    }
+}
+
+//Update the selected view
+function updateDiagram(config) {
+    
+    if (archimateView.name != config.name) {
+        var viewName = config.name;        
+        var existing = $("archimate-diagram-model."+viewName).first();
+        while (existing) {
+            viewName+="+";
+            existing = $("archimate-diagram-model."+viewName).first();
+        }
+        archimateView.name=viewName;
+    }
+    archimateView.documentation = config.documentation;
+    archimateView.prop("Version", String(config.version));
+    archimateView.prop("Last_edited_by", config.editor);
+    archimateView.prop("Last_updated", config.updatedDate);
+    if (config.hideFromExport) {
+        archimateView.prop("_hide_from_export_", ""+config.hideFromExport);
+    }
+    else {
+        archimateView.removeProp("_hide_from_export_");
+    }
+    
+
+    var offset = 0;
+    if (headerConfig.showLogo) { offset = insertLogo(archimateView)+1;}
+    if (config.selectedViews!="") { offset += insertReferences(archimateView,config.selectedViews, offset)+1} // ISSUE WITH OFFSET!
+    createHeader(archimateView, offset);
+    var theChange = "v"+config.version+" - "+config.updatedDate+" - "+config.editor+" - "+config.changelog;
+    if (headerConfig.showChangelog) {createChangelog(archimateView, headerConfig.wide?75:1, headerConfig.wide?offset:offset+13, theChange)}
+	
+// -------------------------------------------------------------------------------------------	
+	
+	if (headerConfig.useCoarchi) {
+	
+		 var logName= theSystem.getProperty("user.name") + " - Changelog";
+		 var theChangeLog = $("archimate-diagram-model."+logName).first();
+		 
+		 if(buttonDialog("Are you going to commit/publish now or later?", ["Commit Now", "Commit later"])=="1") {
+		 			var currentLog = theChangeLog ? (theChangeLog.documentation || "") : "";
+					setClipboardString(archimateView.name+" - "+theChange+"\n"+currentLog);
+					if (theChangeLog) {
+						theChangeLog.documentation = "";
+					}
+		  } else {
+					updateGlobalLog(config.editor,archimateView.name, theChange)
+		 }
+	}
+	
+//-----------------------------------------------------------------------------------------------------------------------------------	
+}
+
+// Create a new view
+function newDiagram(config) {
+    
+    var viewName = config.name;
+    var existing = $("archimate-diagram-model."+viewName).first();
+    while (existing) {
+        viewName+="+";
+        existing = $("archimate-diagram-model."+viewName).first();
+    }
+    var archimateView = model.createArchimateView(viewName);
+    archimateView.documentation = config.documentation;
+    archimateView.prop("Created_by", config.author);
+    archimateView.prop("Created_on", config.createdDate);
+    archimateView.prop("Version", String(config.version));
+    if (config.hideFromExport) {
+        archimateView.prop("_hide_from_export_", ""+config.hideFromExport);
+    }
+
+    var offset = 0;
+
+    if (headerConfig.showLogo) { offset = insertLogo(archimateView)+1;}
+    if (config.selectedViews!="") { offset += insertReferences(archimateView,config.selectedViews, offset)}
+    createHeader(archimateView, offset);
+    var theChange = "v"+config.version+" - "+config.createdDate+" - "+config.author+" - "+config.documentation;
+    if (headerConfig.showChangelog) {createChangelog(archimateView, headerConfig.wide?75:1, headerConfig.wide?offset:offset+13, theChange)}
+    //if (headerConfig.globalChangelog) {updateGlobalLog(config.author, archimateView.name, theChange)};
+    //if (headerConfig.clipChangelog) {setClipboardString(archimateView.name+" - "+theChange)};
+	// -------------------------------------------------------------------------------------------	
+	
+	if (headerConfig.useCoarchi) {
+		 var logName= theSystem.getProperty("user.name") + " - Changelog";
+		 var theChangeLog = $("archimate-diagram-model."+logName).first();
+		 
+		 if(buttonDialog("Are you going to commit/publish now or later?", ["Commit Now", "Commit later"])=="1") {
+		 			var currentLog = theChangeLog ? (theChangeLog.documentation || "") : "";
+					setClipboardString(archimateView.name+" - "+theChange+"\n"+currentLog);
+					if (theChangeLog) {
+						theChangeLog.documentation = "";
+					}
+		  } else {
+					updateGlobalLog(config.editor,archimateView.name, theChange)
+		 }
+	}
+	
+//-----------------------------------------------------------------------------------------------------------------------------------	
+	
+	
+	
+}
+
+function updateGlobalLog(theUser, theName, theChange) {
+    var logName= theUser + " - Changelog";
+    var theChangeLog = $("archimate-diagram-model."+logName).first();
+    if (!theChangeLog) 
+    {
+        var changeLogFolder = $("folder.Changelogs").first();
+        if (!changeLogFolder) {
+            var changeLogFolder  = $("folder.Views").first().createFolder("Changelogs");
+        }
+        var theChangeLog = model.createArchimateView(logName, changeLogFolder);
+        var noteDisplayLog = theChangeLog.createObject("note", gridSize, gridSize, gridSize*100, gridSize*100);
+        noteDisplayLog.labelExpression="$view{documentation}";
+    }
+    theChangeLog.documentation = theName+" - "+theChange +"\n"+ (theChangeLog.documentation || "")
+}
+
+//Regenerate the headers
+function regenerateHeaders() {
+
+}
+
+function formatLabels (theLabels) {
+    theLabels.forEach(function (label){
+        label.borderType = BORDER.RECTANGLE;
+        label.fontStyle = "bold";
+        label.fillColor="#e8e8e8";
+        if (headerConfig.customColours) {
+            label.fillColor = headerConfig.labelFillColour;
+            label.fontColor = headerConfig.labelFontColour;
+            label.opacity = parseInt(headerConfig.labelOpacity);
+            label.outlineOpacity = parseInt(headerConfig.labelOutlineOpacity);
+        }
+    });
+}
+
+function formatNotes (theNotes) {
+    theNotes.forEach(function (note){
+        note.borderType = BORDER.RECTANGLE;           
+        if (headerConfig.customColours) {
+            note.fillColor = headerConfig.noteFillColour;
+            note.fontColor = headerConfig.noteFontColour;
+            note.opacity = parseInt(headerConfig.noteOpacity);
+            note.outlineOpacity = parseInt(headerConfig.noteOutlineOpacity);
+        }
+    });
+}
+
+function formatGroup (theGroup) {
+    theGroup.borderType = BORDER.RECTANGLE;
+    if (headerConfig.customColours) {
+        theGroup.fillColor = headerConfig.groupFillColour;
+        theGroup.opacity = parseInt(headerConfig.groupOpacity);
+        theGroup.outlineOpacity = parseInt(headerConfig.groupOutlineOpacity);
+    }
+}
+
+function createHeader(theView, offset) {
+    
+    var theGroup = $(theView).children("diagram-model-group.Header")
+
+    if (theGroup.length<1) {
+        var theLabels = [];
+        var theNotes = [];
+		offset = offset + 0.4
+        var header_group = theView.createObject("group", gridSize, (offset+1)*gridSize, gridSize*73+1, gridSize*10+1);
+        header_group.name = "Header";
+        header_group.labelExpression = " ";
+        formatGroup(header_group);
+
+
+
+        var label_diagram = theView.createObject("note", gridSize*2, (offset+2)*gridSize, labelWidth, height, true);
+        
+        label_diagram.text = "View Name:";
+        theLabels.push(label_diagram);
+
+        var note_diagram = theView.createObject("note", labelWidth+gridSize*2 , (offset+2)*gridSize, gridSize*43, height,true);
+        note_diagram.labelExpression = "$view{name}";
+        theNotes.push(note_diagram);
+
+        var label_version = theView.createObject("note", gridSize*56, (offset+2)*gridSize, labelWidth, height, true);
+        label_version.text = "Version:";
+        theLabels.push(label_version);
+        
+        var note_version = theView.createObject("note", gridSize*66,(offset+2)*gridSize, gridSize*7, height,true);
+        note_version.labelExpression = "$view{property:Version}";
+        theNotes.push(note_version);
+
+offset = offset + 0.2
+
+        var label_created = theView.createObject("note", gridSize*2, (offset+2)*gridSize+height,  labelWidth, height, true);
+        label_created.text = "Created by/on:";
+        theLabels.push(label_created);
+
+        var note_created = theView.createObject("note", labelWidth+gridSize*2, (offset+2)*gridSize+height, gridSize*25, height, true);
+        note_created.labelExpression = "$view{property:Created_by} $view{property:Created_on}";
+        theNotes.push(note_created);
+
+        var label_updated = theView.createObject("note", labelWidth+gridSize*28, (offset+2)*gridSize+height, labelWidth, height,true);
+        label_updated.text = "Last edited by/on:";
+        theLabels.push(label_updated);
+
+        var note_updated = theView.createObject("note", labelWidth*2+gridSize*28, (offset+2)*gridSize+height, gridSize*25, height,true);
+        note_updated.labelExpression = "$view{property:Last_edited_by} $view{property:Last_updated}";
+        theNotes.push(note_updated);
+
+offset = offset + 0.2
+
+        var label_description = theView.createObject("note", gridSize*2, (offset+2)*gridSize+height*2, labelWidth, height*2, true);
+        label_description.text = "Description:";
+        theLabels.push(label_description);
+        //setLogo(label_description);
+
+        var note_documentation = theView.createObject("note", labelWidth+gridSize*2, (offset+2)*gridSize+height*2, gridSize*61, height*2, true);
+        note_documentation.labelExpression = "$view{documentation}";
+        theNotes.push(note_documentation);
+
+        formatLabels(theLabels);
+        formatNotes(theNotes);
+    }
+    else {
+        theGroup.first().bounds={x:gridSize, y:offset*gridSize, width:gridSize*73+1, height:gridSize*10+1};
+        formatGroup(theGroup);
+    }
+   
+}
+
+function createChangelog(theView, xOffset, yOffset, change) {
+
+    var theChangeGroup = $(theView).children("diagram-model-group.Changelog")
+
+    if (theChangeGroup.length<1) {
+        var header_group = theView.createObject("group", xOffset*gridSize , (yOffset+1)*gridSize , gridSize*73+1, gridSize*10+1);
+        header_group.name = "Changelog";
+        formatGroup(header_group);
+
+        var note_changelog = theView.createObject("note", (xOffset+1)*gridSize, (yOffset+3)*gridSize, gridSize*71, gridSize*7, true);
+        note_changelog.text = change;
+        formatNotes([note_changelog]);
+    }
+    else {
+        theChangeGroup.first().bounds={x:xOffset*gridSize, y:(yOffset)*gridSize, width:gridSize*73+1, height:gridSize*10+1}
+        formatGroup(theChangeGroup);
+        note_changelog = theChangeGroup.children("diagram-model-note").first();
+        note_changelog.text = change + "\n---\n"+note_changelog.text;
+    }
+
+    
+}
+
+function insertLogo(theView){
+    var theGroup = $(theView).children("diagram-model-group.Logo")
+    if (theGroup.length<1) {      
+        var logoGroup = theView.createObject("group", gridSize, gridSize, (linkWidth)+(gridSize*2)+1, (gridSize*5)+1);
+        //var logoGroup = theView.createObject("group", gridSize, gridSize, (linkWidth)+(gridSize*2)+100, (gridSize*5)+1);
+        logoGroup.name="Logo";
+        logoGroup.borderType = BORDER.RECTANGLE;
+        logoGroup.outlineOpacity =0;
+        logoGroup.labelExpression=" ";
+        if (headerConfig.customColours) {
+            logoGroup.fillColor = headerConfig.groupFillColour;
+        }
+
+        var theLogo = theView.createObject("note",gridSize, gridSize, (linkWidth)+(gridSize*2)+1, (gridSize*5)+1,true);
+        theLogo.borderType = BORDER.NONE;
+        setLogo(theLogo);
+		
+		var theLink2 = $("."+headerConfig.logoLink).filter("archimate-diagram-model").first();
+		if (theLink2 ==null) {console.log("no diagram chosen")} else {
+			var viewRef = theView.createViewReference(theLink2, gridSize, gridSize, (linkWidth)+(gridSize*2)+1, (gridSize*5)+1,true);
+			viewRef.Opacity = 0;
+			viewRef.outlineOpacity =0;
+			viewRef.labelExpression=" ";
+			viewRef.showIcon = SHOW_ICON.NEVER
+		}
+    }
+    return 5;
+}
+
+function insertReferences(theView, theViews, offset) {
+
+	var theGroup = $(theView).children("diagram-model-group.Links")
+    var selected_views_array = theViews.toString().split(",");
+    var selected_views_array_count = selected_views_array.length;
+    var totalRows = Math.ceil(selected_views_array_count/rowLimit);
+    
+
+    var maxHeight= gridSize*(totalRows+1)+(linkHeight*totalRows);
+
+    if (theGroup.length<1) {      
+        var link_group = theView.createObject("group", gridSize, (offset+1)*gridSize, (rowLimit*linkWidth)+(gridSize*(rowLimit+rowPadding))+1, maxHeight+1);
+        link_group.name = "Links";
+        link_group.labelExpression = " ";
+        formatGroup(link_group);
+    }
+    else {
+        theGroup.first().bounds={x:gridSize, y:(offset+1)*gridSize, width:(rowLimit*linkWidth)+(gridSize*(rowLimit+rowPadding))+1, height:maxHeight+1};
+        formatGroup(theGroup);
+        theGroup.children().forEach(function (v){
+            v.delete();
+        });      
+    }
+    
+    var rowCounter = 0;
+    var row = 0;
+
+    for (var j=0; j<selected_views_array_count;j++) {
+        var theLink = $("#"+selected_views_array[j]).filter("archimate-diagram-model").first();
+        if (rowCounter>=rowLimit) {
+            row++
+            rowCounter=0;
+        }
+        if (theLink.id!=theView.id) {
+            var viewRef = theView.createViewReference(theLink, gridSize*(rowCounter+2)+(rowCounter*linkWidth), (offset)*gridSize+gridSize*2+(row*linkHeight)+(gridSize*row), linkWidth, linkHeight, true);
+            viewRef.textPosition = TEXT_POSITION.CENTER;
+            if (!headerConfig.showLinkIcons) {viewRef.showIcon = SHOW_ICON.NEVER};
+            if (headerConfig.customColours) {
+                viewRef.fillColor = headerConfig.linkFillColour;
+                viewRef.fontColor = headerConfig.linkFontColour;
+                viewRef.opacity = parseInt(headerConfig.linkOpacity);
+                viewRef.outlineOpacity = parseInt(headerConfig.linkOutlineOpacity);
+            }
+            rowCounter++;
+        }
+    };
+	return (maxHeight+gridSize)/gridSize;
+}
+
+/* borrowed from https://gist.github.com/RemcoSchellekensNS/c840313d9166ee2dde5be8b878c1668a */
+function setClipboardString(string) {
+	
+    var Toolkit = Java.type("java.awt.Toolkit");
+    var Transferable = Java.type("java.awt.datatransfer.StringSelection");
+
+    try {
+        var clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+        transferable =  new Transferable(string);
+        
+        clipboard.setContents(transferable, transferable);
+    } 
+    catch (e) {
+        console.log("Failed copy string " + string + " to the clipboard due to exception: " + e);
+    }
+}
+
+function setLogo(theElement) {
+    theElement.imageSource = IMAGE_SOURCE.CUSTOM;
+    theElement.image = model.createImage(headerConfig.logoFile);
+    theElement.imagePosition = IMAGE_POSITION.MIDDLE_CENTRE;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+//Update the selected view
+function updateViewRefs(config) {
+
+	
+	if (config.logoLink) {
+		var theViews = config.selectedViews
+		var selected_views_array = theViews.toString().split(",");        
+
+		headerConfig.logoLink = $("#"+selected_views_array[0]).filter("archimate-diagram-model").first().toString().substring(25)
+		//console.log($("#"+selected_views_array[0]).filter("archimate-diagram-model").first());
+        //headerConfig.logoLink = "RPA" //$(".Workflow").filter("archimate-diagram-model").first();		
+		$.fs.writeFile(__DIR__ + '.conf/header-conf.js', "const headerConfig="+JSON.stringify(headerConfig));
+	} else {
+		var offset = 0;
+		if (headerConfig.showLogo) { offset = insertLogo(archimateView)+1;}
+		if (config.selectedViews!="") { offset += insertReferences(archimateView,config.selectedViews, offset)+1} 
+		createHeader(archimateView, offset);
+		var theChange = "v"+config.version+" - "+config.updatedDate+" - "+config.editor+" - "+config.changelog;
+		if (headerConfig.showChangelog) {createChangelog(archimateView, headerConfig.wide?75:1, headerConfig.wide?offset:offset+13, theChange)}
+	}	
+ // 
+}
+//-----------------------------------------------------------------------------------------------------------------------------
+
+
+
+// Run everything!
+manageDiagram(theOption);

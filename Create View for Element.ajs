@@ -1,0 +1,285 @@
+﻿console.show();
+console.clear();
+
+var theSystem = Java.type("java.lang.System");
+var headerConfig = {};
+
+// --- Load Configuration from Manage Diagrams ---
+try {
+    load(__DIR__ + '.conf/header-conf.js');
+} catch (e) {
+    // Hardcoded Fallbacks
+    headerConfig.gridSize = 12;
+    headerConfig.customColours = true;
+    headerConfig.groupFillColour = "#d9e3e6"; 
+    headerConfig.labelFillColour = "#34344e"; 
+    headerConfig.labelFontColour = "#ffffff";
+    headerConfig.noteFillColour = "#ffffff";
+    headerConfig.linkFillColour = "#34344e";  
+    headerConfig.linkFontColour = "#ffffff";
+    headerConfig.wide = false;
+    headerConfig.linkHeight = 2;
+}
+
+// --- Configuration Constants ---
+var gridSize = headerConfig.gridSize || 12;
+var labelWidth = gridSize * 10;
+var height = gridSize * 2;
+var linkHeight = gridSize * (headerConfig.linkHeight || 2);
+var linkWidth = gridSize * 17;
+var rowLimit = headerConfig.wide ? 8 : 4;
+
+// --- Helpers ---
+function getDigits(num) { 
+    return num < 10 ? "0" + num : "" + num; 
+}
+
+function getFormattedDate() {
+    var d = new Date();
+    return d.getFullYear() + "-" + getDigits(d.getMonth() + 1) + "-" + getDigits(d.getDate());
+}
+
+// --- Selection Logic ---
+var selectedElements = $(selection);
+
+if (selectedElements.length === 0) {
+    window.alert("Please select an element first.");
+    exit();
+}
+
+// 1) CHANGE: Filter the selection to include ANY visual element connected to a concept, regardless of object type.
+var validElements = selectedElements.filter(function(o) { return o.concept != null && o.view != null; });
+
+if (validElements.length === 0) {
+    window.alert("Please select a valid element directly in a diagram/view.");
+    exit();
+}
+
+// Create a view for each selected element
+validElements.each(function(element) {
+    Create_Detail_Page(element);
+});
+
+function Create_Detail_Page(element) {
+    var coreConcept = element.concept;
+    var h = coreConcept.name || "Unnamed Element";
+    
+    // 3) CHANGE: Name the newly created view, allowing the user to optionally adjust it via an input box
+    var defaultViewName = "Detail view of " + h;
+    var userInput = window.prompt("Please confirm or adjust the name for the new view:", defaultViewName);
+
+    // If the user clicks 'Cancel' on the prompt, abort view creation for this specific element
+    if (userInput === null) {
+        console.log("View creation cancelled by user for: " + h);
+        return; 
+    }
+
+    // Use the inputted name, or fall back to the default if the user cleared the box but clicked 'OK'
+    var viewName = userInput.trim() !== "" ? userInput.trim() : defaultViewName;
+    var existing = $("archimate-diagram-model." + viewName).first();
+    
+    while (existing) {
+        viewName += "+";
+        existing = $("archimate-diagram-model." + viewName).first();
+    }
+
+    var archimateView = model.createArchimateView(viewName);
+    archimateView.documentation = "Complete overview of all elements related to " + h;
+    archimateView.prop("Created_by", theSystem.getProperty("user.name"));
+    archimateView.prop("Created_on", getFormattedDate());
+    archimateView.prop("Version", "1");
+
+    // 2) CHANGE: Link to the view where the element was selected, instead of the hardcoded Capability Model
+    var originalView = element.view;
+    var offset = 0;
+    if (originalView) {
+        offset = insertReferences(archimateView, originalView.id, 0);
+    } else {
+        console.log("Notice: Original view not found for header linking.");
+    }
+
+    // Create Header (RESTORED)
+    createHeader(archimateView, offset);
+
+    // 4) CHANGE: Add the selected element and map its relationships
+    var startY = (offset * gridSize) + (gridSize * 15);
+    var centerX = 400;
+    var centerY = startY + 200;
+
+    // Place the selected element in the center
+    var centralVisual = archimateView.add(coreConcept, centerX, centerY, 120, 55);
+    var addedVisuals = {};
+    addedVisuals[coreConcept.id] = centralVisual;
+
+    // Find all relationships (incoming and outgoing) connected to the core concept
+    var rels = $(coreConcept).outRels().add($(coreConcept).inRels());
+    var relatedConcepts = [];
+    
+    rels.each(function(rel) {
+        if (rel.source.id !== coreConcept.id && !addedVisuals[rel.source.id]) {
+            relatedConcepts.push(rel.source);
+            addedVisuals[rel.source.id] = true; // Use boolean as temporary placeholder
+        }
+        if (rel.target.id !== coreConcept.id && !addedVisuals[rel.target.id]) {
+            relatedConcepts.push(rel.target);
+            addedVisuals[rel.target.id] = true; // Use boolean as temporary placeholder
+        }
+    });
+
+    // Create a circular layout to position the related elements around the center
+    var radius = 250;
+    var angleStep = relatedConcepts.length > 0 ? (2 * Math.PI) / relatedConcepts.length : 0;
+
+    relatedConcepts.forEach(function(relConcept, index) {
+        var angle = index * angleStep;
+        var rx = centerX + radius * Math.cos(angle);
+        var ry = centerY + radius * Math.sin(angle);
+        var visObj = archimateView.add(relConcept, rx, ry, 120, 55);
+        addedVisuals[relConcept.id] = visObj; // Replace boolean placeholder with actual visual object reference
+    });
+
+    // Draw the actual relationships connecting the visual elements together
+    rels.each(function(rel) {
+        var sourceVis = addedVisuals[rel.source.id];
+        var targetVis = addedVisuals[rel.target.id];
+        // Ensure both elements exist visually on the canvas before adding the relationship
+        if (sourceVis && targetVis && sourceVis !== true && targetVis !== true) {
+            archimateView.add(rel, sourceVis, targetVis);
+        }
+    });
+
+    // Add the transparent navigation link to the selected visual element
+    createNestedLink(element, archimateView);
+    console.log("Successfully generated View and Link for: " + h);
+}
+
+// --- Auto-Linking Logic ---
+function createNestedLink(visualElement, targetView) {
+    if (!visualElement.bounds || !visualElement.view) {
+        console.log("Skipped linking for " + visualElement.name + " (Element was not selected from a diagram).");
+        return;
+    }
+
+    var w = visualElement.bounds.width > 0 ? visualElement.bounds.width : 120;
+    var h = visualElement.bounds.height > 0 ? visualElement.bounds.height : 55;
+
+    var relX = w - 30;
+    var relY = h - 30;
+
+    try {
+        var viewRef = visualElement.view.createViewReference(targetView, 0, 0, 30, 30, true);
+        visualElement.add(viewRef, relX, relY);
+        
+        viewRef.opacity = 0;
+        viewRef.outlineOpacity = 0;
+        viewRef.labelExpression = " ";
+        
+    } catch (err) {
+        console.error("Failed to add nested link to " + visualElement.name + ": " + err);
+    }
+}
+
+// --- Formatting Helpers ---
+function formatLabels(theLabels) {
+    theLabels.forEach(function (label){
+        label.borderType = BORDER.RECTANGLE;
+        label.fontStyle = "bold";
+        if (headerConfig.customColours) {
+            label.fillColor = headerConfig.labelFillColour;
+            label.fontColor = headerConfig.labelFontColour;
+            label.opacity = parseInt(headerConfig.labelOpacity || 255);
+            label.outlineOpacity = parseInt(headerConfig.labelOutlineOpacity || 255);
+        }
+    });
+}
+
+function formatNotes(theNotes) {
+    theNotes.forEach(function (note){
+        note.borderType = BORDER.RECTANGLE;
+        if (headerConfig.customColours) {
+            note.fillColor = headerConfig.noteFillColour;
+            note.fontColor = headerConfig.noteFontColour;
+            note.opacity = parseInt(headerConfig.noteOpacity || 255);
+            note.outlineOpacity = parseInt(headerConfig.noteOutlineOpacity || 255);
+        }
+    });
+}
+
+function formatGroup(theGroup) {
+    theGroup.borderType = BORDER.RECTANGLE;
+    if (headerConfig.customColours) {
+        theGroup.fillColor = headerConfig.groupFillColour;
+        theGroup.opacity = parseInt(headerConfig.groupOpacity || 255);
+        theGroup.outlineOpacity = parseInt(headerConfig.groupOutlineOpacity || 255);
+    }
+}
+
+function createHeader(theView, offset) {
+    var theLabels = [], theNotes = [];
+    var startY = (offset + 0.4);
+    
+    var header_group = theView.createObject("group", gridSize, (startY+1)*gridSize, gridSize*73+1, gridSize*10+1);
+    header_group.name = "Header";
+    header_group.labelExpression = " ";
+    formatGroup(header_group);
+
+    var y1 = (startY + 2) * gridSize;
+    var lbl1 = theView.createObject("note", gridSize*2, y1, labelWidth, height, true);
+    lbl1.text = "View Name:";
+    theLabels.push(lbl1);
+    var val1 = theView.createObject("note", labelWidth+gridSize*2, y1, gridSize*43, height, true);
+    val1.labelExpression = "$view{name}";
+    theNotes.push(val1);
+    
+    var lblV = theView.createObject("note", gridSize*56, y1, labelWidth, height, true);
+    lblV.text = "Version:";
+    theLabels.push(lblV);
+    var valV = theView.createObject("note", gridSize*66, y1, gridSize*7, height, true);
+    valV.labelExpression = "$view{property:Version}";
+    theNotes.push(valV);
+
+    var y2 = y1 + height;
+    var lblC = theView.createObject("note", gridSize*2, y2, labelWidth, height, true);
+    lblC.text = "Created by/on:";
+    theLabels.push(lblC);
+    var valC = theView.createObject("note", labelWidth+gridSize*2, y2, gridSize*25, height, true);
+    valC.labelExpression = "$view{property:Created_by} $view{property:Created_on}";
+    theNotes.push(valC);
+
+    var lblU = theView.createObject("note", labelWidth+gridSize*28, y2, labelWidth, height, true);
+    lblU.text = "Last edited by/on:";
+    theLabels.push(lblU);
+    var valU = theView.createObject("note", labelWidth*2+gridSize*28, y2, gridSize*25, height, true);
+    valU.labelExpression = "$view{property:Last_edited_by} $view{property:Last_updated}";
+    theNotes.push(valU);
+
+    var y3 = y2 + height;
+    var lblD = theView.createObject("note", gridSize*2, y3, labelWidth, height*2, true);
+    lblD.text = "Description:";
+    theLabels.push(lblD);
+    var valD = theView.createObject("note", labelWidth+gridSize*2, y3, gridSize*61, height*2, true);
+    valD.labelExpression = "$view{documentation}";
+    theNotes.push(valD);
+
+    formatLabels(theLabels);
+    formatNotes(theNotes);
+}
+
+function insertReferences(theView, theViewID, offset) {
+    var maxHeight = gridSize * 2 + linkHeight;
+    var link_group = theView.createObject("group", gridSize, (offset+1)*gridSize, (rowLimit*linkWidth)+(gridSize*5)+1, maxHeight+1);
+    link_group.name = "Links";
+    link_group.labelExpression = " ";
+    formatGroup(link_group);
+
+    var theLink = $("#"+theViewID).first();
+    var viewRef = theView.createViewReference(theLink, gridSize*2, (offset+2)*gridSize, linkWidth, linkHeight, true);
+    viewRef.textPosition = TEXT_POSITION.CENTER;
+    if (headerConfig.customColours) {
+        viewRef.fillColor = headerConfig.linkFillColour;
+        viewRef.fontColor = headerConfig.linkFontColour;
+        viewRef.opacity = parseInt(headerConfig.linkOpacity || 255);
+        viewRef.outlineOpacity = parseInt(headerConfig.linkOutlineOpacity || 255);
+    }
+    return (maxHeight+gridSize)/gridSize;
+}

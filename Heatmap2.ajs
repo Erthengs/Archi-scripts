@@ -1,0 +1,298 @@
+﻿/*
+ * HeatMap by Property Value
+ * Requires jArchi - https://www.archimatetool.com/blog/2018/07/02/jarchi/
+ * Version 11: Added "Remove Preset" functionality.
+ *
+ * (c) 2022 Steven Mileham (Enhanced 2026)
+ *
+ */
+var debug = false;
+var buttonLimit = 20; 
+var maxHorizontalChars = 80; // Threshold for switching to vertical list
+
+console.show();
+console.clear();
+console.log("> Starting Heat Map By Property Value");
+
+// --- 1. Config Setup ---
+var heatmapConfig = { Mappings: {} };
+try {
+    load(__DIR__ + '.conf/heatmap-conf.js');
+} catch (e) {
+    if (debug) console.log("No config found or failed to load, starting fresh.");
+}
+
+if (!heatmapConfig.Mappings) {
+    heatmapConfig.Mappings = {};
+}
+
+function saveConfig() {
+    var fileStr = "heatmapConfig = " + JSON.stringify(heatmapConfig, null, 2) + ";";
+    $.fs.writeFile(__DIR__ + '.conf/heatmap-conf.js', fileStr);
+    console.log("> Config saved successfully.");
+}
+
+// --- Helpers ---
+function componentToHex(c) {
+    var hex = c.toString(16);
+    return hex.length == 1 ? "0" + hex : hex;
+}
+
+function rgbToHex(r, g, b) {
+    return "#" + componentToHex(r) + componentToHex(g) + componentToHex(b);
+}
+
+function colorDialog() {
+    var dialog = new org.eclipse.swt.widgets.ColorDialog(shell);
+    var theColourRGB = dialog.open();
+    return !theColourRGB ? null : rgbToHex(theColourRGB.red, theColourRGB.green, theColourRGB.blue);
+}
+
+function buttonDialog(message, options) {
+    var dialog = new org.eclipse.jface.dialogs.MessageDialog(shell,"Archi",null,message,3,options.concat(["Cancel"]),0);
+    var result = dialog.open();
+    return result == options.length ? null : (result+1).toString();
+}
+
+var theView = $(selection).filter("archimate-diagram-model").first();
+if (!theView) {
+    console.error("> Please select a view.");
+    exit();
+}
+
+// --- 2. Gather All Properties in View ---
+var propertyHash = {};
+$(theView).find().not("relationship").each(function(e) {
+    var theProps = e.prop();
+    for (var i = 0; i < theProps.length; i++) {
+        var propName = theProps[i];
+        var propVal = e.prop(propName);
+        if (propertyHash[propName]) {
+            propertyHash[propName][propVal] = 1;
+        } else {
+            propertyHash[propName] = {};
+            propertyHash[propName][propVal] = 1;
+        }
+    }
+});
+
+// --- 3. Build the Unified Main Menu ---
+var savedNames = Object.keys(heatmapConfig.Mappings);
+var mainMenu = ["New (Fill)", "New (Line/Font)", "Reset", "Remove Preset"];
+var menuList = "(1) New (Fill)\n(2) New (Line/Font)\n(3) Reset\n(4) Remove Preset\n";
+
+for (var m = 0; m < savedNames.length; m++) {
+    var displayName = savedNames[m]; 
+    mainMenu.push(displayName);
+    menuList += "(" + (m + 5) + ") " + displayName + "\n";
+}
+
+var totalMenuChars = mainMenu.join("").length;
+var mainChoice = "-1";
+
+while (true) {
+    if (mainMenu.length <= buttonLimit && totalMenuChars < maxHorizontalChars) {
+        mainChoice = buttonDialog("Select coloring type, action, or preset:", mainMenu);
+    } else {
+        mainChoice = window.prompt("Select an option by number (List format):\n\n" + menuList, "1");
+    }
+    if (mainChoice === null || mainChoice.trim() == "" || (parseInt(mainChoice.trim()) > 0 && parseInt(mainChoice.trim()) <= mainMenu.length)) {
+        break;
+    }
+}
+
+if (mainChoice === null || mainChoice.trim() === "") {
+    console.log("> Cancelled by user.");
+    exit();
+}
+
+var choiceIndex = parseInt(mainChoice);
+var theOption = "";
+var createNew = true;
+var selectedPropertyName = "";
+var finalColors = {};
+
+if (choiceIndex === 1) {
+    theOption = "FillColoring";
+} else if (choiceIndex === 2) {
+    theOption = "FontColoring";
+} else if (choiceIndex === 3) {
+    // Reset Flow
+    var resetConfirm = window.confirm("Are you sure you want to reset all element colors to default?");
+    if (resetConfirm) {
+        $(theView).find().not("relationship").not("diagram-model-group").not("diagram-model-note").not("diagram-model-reference").each(function(e) {
+            e.fillColor = null;
+            e.FontColor = null;
+            e.LineColor = null;
+        });
+        console.log("> Colors reset to default.");
+    }
+    exit();
+} else if (choiceIndex === 4) {
+    // Remove Preset Flow
+    if (savedNames.length === 0) {
+        window.alert("No presets available to remove.");
+        exit();
+    }
+    
+    var removeListStr = "";
+    for (var r = 0; r < savedNames.length; r++) {
+        removeListStr += "(" + (r + 1) + ") " + savedNames[r] + "\n";
+    }
+    
+    var removeChoice = window.prompt("Select a preset to remove by number:\n\n" + removeListStr, "");
+    if (removeChoice !== null && removeChoice.trim() !== "") {
+        var rIndex = parseInt(removeChoice.trim()) - 1;
+        if (rIndex >= 0 && rIndex < savedNames.length) {
+            var nameToRemove = savedNames[rIndex];
+            if (window.confirm("Are you sure you want to permanently remove preset: '" + nameToRemove + "'?")) {
+                delete heatmapConfig.Mappings[nameToRemove];
+                saveConfig();
+                console.log("> Preset '" + nameToRemove + "' has been removed.");
+            }
+        } else {
+            console.log("> Invalid selection for removal.");
+        }
+    }
+    exit();
+} else {
+    // Apply Preset Flow
+    createNew = false;
+    var chosenPresetName = savedNames[choiceIndex - 5]; // Offset by 5 due to 4 fixed menu options
+    var presetData = heatmapConfig.Mappings[chosenPresetName];
+    theOption = presetData.coloringType;
+    selectedPropertyName = presetData.propertyName;
+    for (var val in presetData.colors) {
+        finalColors[val] = presetData.colors[val];
+    }
+    console.log("> Applying preset: " + chosenPresetName);
+}
+
+// --- 4. Logic for applying a Preset ---
+if (!createNew) {
+    var viewValues = Object.keys(propertyHash[selectedPropertyName] || {});
+    var missingValues = [];
+    for (var v = 0; v < viewValues.length; v++) {
+        if (!finalColors[viewValues[v]]) {
+            missingValues.push(viewValues[v]);
+        }
+    }
+    if (missingValues.length > 0) {
+        window.alert("Found " + missingValues.length + " new value(s) for '" + selectedPropertyName + "'.");
+        var configUpdated = false;
+        for (var m = 0; m < missingValues.length; m++) {
+            var mVal = missingValues[m];
+            var mAction = buttonDialog("Color for '" + mVal + "'?", ["Choose Color", "Skip"]);
+            if (mAction === "1") {
+                var mCol = colorDialog();
+                if (mCol) {
+                    finalColors[mVal] = mCol;
+                    heatmapConfig.Mappings[chosenPresetName].colors[mVal] = mCol;
+                    configUpdated = true;
+                }
+            }
+        }
+        if (configUpdated) saveConfig();
+    }
+} 
+// --- 5. Logic for creating a New Mapping ---
+else {
+    var propertyList = "";
+    var propArray = [];
+    var idx = 1;
+    for (var property in propertyHash){
+        propertyList += "(" + idx + ") " + property + "\n";
+        propArray.push(property);
+        idx++;
+    }
+
+    if (propArray.length === 0) {
+        window.alert("No properties found in this view.");
+        exit();
+    }
+
+    var totalPropChars = propArray.join("").length;
+    var theProperty = "-1";
+    while (true) {
+        if (propArray.length <= buttonLimit && totalPropChars < maxHorizontalChars) {
+            theProperty = buttonDialog("Select a Property to Heatmap:", propArray);
+        } else {
+            theProperty = window.prompt("Select a Property by number:\n\n" + propertyList, "");
+        }
+        if (theProperty === null || theProperty.trim() == "" || (parseInt(theProperty.trim()) > 0 && parseInt(theProperty.trim()) <= propArray.length)) {
+            break;
+        }
+    }
+
+    if (theProperty === null || theProperty.trim() === "") exit();
+    selectedPropertyName = propArray[parseInt(theProperty) - 1];
+    var viewValuesNew = Object.keys(propertyHash[selectedPropertyName]);
+
+    for (var n = 0; n < viewValuesNew.length; n++) {
+        var nVal = viewValuesNew[n];
+        var nAction = buttonDialog("Color for '" + nVal + "'?", ["Choose Color", "Skip"]);
+        if (nAction === "1") {
+            var nCol = colorDialog();
+            if (nCol) finalColors[nVal] = nCol;
+        }
+    }
+    
+    if (Object.keys(finalColors).length > 0) {
+        var doSave = window.confirm("Save this as a preset?");
+        if (doSave) {
+            var newMapName = window.prompt("Enter preset name:", selectedPropertyName + " Map");
+            if (newMapName && newMapName.trim() !== "") {
+                heatmapConfig.Mappings[newMapName] = {
+                    propertyName: selectedPropertyName,
+                    coloringType: theOption,
+                    colors: finalColors
+                };
+                saveConfig();
+            }
+        }
+    }
+}
+
+// --- 6. Apply Colors to the View ---
+if (Object.keys(finalColors).length > 0) {
+    var defaultColours = window.confirm("Reset non-matching components to default?");
+    $(theView).find().not("relationship").not("diagram-model-group").not("diagram-model-note").not("diagram-model-reference").each(function(e) {
+        var isProperty = e.prop(selectedPropertyName);
+        var matchedColor = finalColors[isProperty];
+        
+        if (matchedColor) {
+            if (theOption === "FillColoring") {
+                e.fillColor = matchedColor;
+            } else { 
+                e.FontColor = matchedColor;
+                e.LineColor = matchedColor;
+            }
+        } else if (defaultColours) {
+            if (theOption === "FillColoring") {
+                e.fillColor = null;
+            } else { 
+                e.FontColor = null;
+                e.LineColor = null;
+            }
+        }
+    });
+
+    // --- 7. Build Key ---
+    $(theView).find(".Key").filter("diagram-model-group").delete();
+    var numKeys = Object.keys(finalColors).length;
+    var theKey = theView.createObject("diagram-model-group", 12, -36 - (36 * numKeys), 240, 24 + (36 * numKeys));
+    theKey.borderType = "1";
+    theKey.name = "Key";
+    
+    var kIdx = 0;
+    for (var keyVal in finalColors) {
+        var aKey = theKey.createObject("diagram-model-note", 12, 24 + (kIdx * 36), 216, 24);
+        aKey.fillColor = finalColors[keyVal];
+        aKey.borderType = "1";
+        aKey.text = selectedPropertyName + "=" + keyVal;
+        kIdx++;
+    }
+    console.log("> Heatmap applied successfully.");
+} else {
+    console.log("> Finished without applying colors.");
+}

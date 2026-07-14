@@ -1,0 +1,261 @@
+﻿    // 3. Set Content Size and position ///////////////////////
+    var s = 20, t = 250, w = 280, h_box = 300;
+/////////////////////////////////////////////////////////////////
+
+console.show();
+console.clear();
+
+var theSystem = Java.type("java.lang.System");
+var headerConfig = {};
+
+// --- Load Configuration from Manage Diagrams ---
+try {
+    load(__DIR__ + '.conf/header-conf.js');
+} catch (e) {
+    // Hardcoded Fallbacks
+    headerConfig.gridSize = 12;
+    headerConfig.customColours = true;
+    headerConfig.groupFillColour = "#d9e3e6"; 
+    headerConfig.labelFillColour = "#34344e"; 
+    headerConfig.labelFontColour = "#ffffff";
+    headerConfig.noteFillColour = "#ffffff";
+    headerConfig.linkFillColour = "#34344e";  
+    headerConfig.linkFontColour = "#ffffff";
+    headerConfig.wide = false;
+    headerConfig.linkHeight = 2;
+}
+
+// --- Configuration Constants ---
+var gridSize = headerConfig.gridSize || 12;
+var labelWidth = gridSize * 10;
+var height = gridSize * 2;
+var linkHeight = gridSize * (headerConfig.linkHeight || 2);
+var linkWidth = gridSize * 17;
+var rowLimit = headerConfig.wide ? 8 : 4;
+
+// --- Helpers ---
+function getDigits(num) { 
+    return num < 10 ? "0" + num : "" + num; 
+}
+
+function getFormattedDate() {
+    var d = new Date();
+    return d.getFullYear() + "-" + getDigits(d.getMonth() + 1) + "-" + getDigits(d.getDate());
+}
+
+// --- Selection Logic ---
+var selectedElements = $(selection);
+
+if (selectedElements.length === 0) {
+    window.alert("Please select an element first.");
+    exit();
+}
+
+// Filter the selection to only include Capabilities
+var selectedCaps = selectedElements.filter("capability");
+
+if (selectedCaps.length === 0) {
+    window.alert("The selected element is not a Capability. Please select a Capability.");
+    exit();
+}
+
+// Create a view for each selected capability
+selectedCaps.each(function(capElement) {
+    Create_Cap_Page(capElement);
+});
+
+function Create_Cap_Page(capElement) {
+    var h = capElement.name;
+    var viewName = "Capability " + h;
+    var existing = $("archimate-diagram-model." + viewName).first();
+    
+    while (existing) {
+        viewName += "+";
+        existing = $("archimate-diagram-model." + viewName).first();
+    }
+
+    var archimateView = model.createArchimateView(viewName);
+    archimateView.documentation = "Complete overview of all elements related to the capability " + h;
+    archimateView.prop("Created_by", theSystem.getProperty("user.name"));
+    archimateView.prop("Created_on", getFormattedDate());
+    archimateView.prop("Version", "1");
+
+    // 1. Link to Capability Model
+    var capModelView = $("archimate-diagram-model.Capability Model").first();
+    var offset = 0;
+    if (capModelView) {
+        offset = insertReferences(archimateView, capModelView.id, 0);
+    } else {
+        console.log("Notice: View 'Capability Model' not found for header linking.");
+    }
+
+    // 2. Create Header
+    createHeader(archimateView, offset);
+
+    // 3. Add Content Elements
+    var s = 20, t = 250, w = 280, h_box = 300;
+    
+    var boxes = [
+        { lab: "Strategy & Organization", x: (s*1)+(w*0), y: t, wd: w, ht: h_box },
+        { lab: "Principles", x: (s*2)+(w*1), y: t, wd: w, ht: h_box },
+        { lab: "Applications", x: (s*3)+(w*2), y: t, wd: w, ht: h_box },
+        { lab: "Processes", x: (s*1)+(w*0), y: (t+h_box+20), wd: (w*1.5)+20, ht: h_box },
+        { lab: "Data", x: (s*3)+(w*1.5), y: (t+h_box+20), wd: w*1.5, ht: h_box }
+    ];
+
+    // Extract the core model concept if a diagram visual object was selected
+    var coreConcept = capElement.concept ? capElement.concept : capElement;
+
+    boxes.forEach(function(b) {
+        // Use the core concept to draw the new visual elements
+        var pr = archimateView.add(coreConcept, b.x, b.y, b.wd, b.ht);
+        pr.labelExpression = b.lab;
+        pr.fillColor = "#ffffff";
+        pr.textPosition = TEXT_POSITION.TOP;
+        pr.showIcon = SHOW_ICON.NEVER;
+		pr.fontSize = 14;
+		pr.fontStyle = "bold";
+    });
+
+    // 4. PART 2 INTEGRATION: Add the transparent navigation link to the selected visual element
+    createNestedLink(capElement, archimateView);
+    console.log("Successfully generated View and Link for: " + h);
+}
+
+// --- PART 2: Auto-Linking Logic ---
+function createNestedLink(visualElement, targetView) {
+    // Safety check: Ensure the user selected a visual element on a diagram (not from the model tree)
+    if (!visualElement.bounds || !visualElement.view) {
+        console.log("Skipped linking for " + visualElement.name + " (Element was not selected from a diagram).");
+        return;
+    }
+
+    // Get element dimensions (with fallbacks)
+    var w = visualElement.bounds.width > 0 ? visualElement.bounds.width : 120;
+    var h = visualElement.bounds.height > 0 ? visualElement.bounds.height : 55;
+
+    // Calculate coordinates purely relative to the element's bottom-right corner
+    var relX = w - 30;
+    var relY = h - 30;
+
+    try {
+        // Create the view reference on the diagram first
+        var viewRef = visualElement.view.createViewReference(targetView, 0, 0, 30, 30, true);
+        
+        // Nest the new reference directly into the selected element
+        visualElement.add(viewRef, relX, relY);
+        
+        // Apply the transparent formatting
+        viewRef.opacity = 0;
+        viewRef.outlineOpacity = 0;
+        viewRef.labelExpression = " ";
+        
+    } catch (err) {
+        console.error("Failed to add nested link to " + visualElement.name + ": " + err);
+    }
+}
+
+// --- Formatting Helpers ---
+function formatLabels(theLabels) {
+    theLabels.forEach(function (label){
+        label.borderType = BORDER.RECTANGLE;
+        label.fontStyle = "bold";
+        if (headerConfig.customColours) {
+            label.fillColor = headerConfig.labelFillColour;
+            label.fontColor = headerConfig.labelFontColour;
+            label.opacity = parseInt(headerConfig.labelOpacity || 255);
+            label.outlineOpacity = parseInt(headerConfig.labelOutlineOpacity || 255);
+        }
+    });
+}
+
+function formatNotes(theNotes) {
+    theNotes.forEach(function (note){
+        note.borderType = BORDER.RECTANGLE;
+        if (headerConfig.customColours) {
+            note.fillColor = headerConfig.noteFillColour;
+            note.fontColor = headerConfig.noteFontColour;
+            note.opacity = parseInt(headerConfig.noteOpacity || 255);
+            note.outlineOpacity = parseInt(headerConfig.noteOutlineOpacity || 255);
+        }
+    });
+}
+
+function formatGroup(theGroup) {
+    theGroup.borderType = BORDER.RECTANGLE;
+    if (headerConfig.customColours) {
+        theGroup.fillColor = headerConfig.groupFillColour;
+        theGroup.opacity = parseInt(headerConfig.groupOpacity || 255);
+        theGroup.outlineOpacity = parseInt(headerConfig.groupOutlineOpacity || 255);
+    }
+}
+
+function createHeader(theView, offset) {
+    var theLabels = [], theNotes = [];
+    var startY = (offset + 0.4);
+    
+    var header_group = theView.createObject("group", gridSize, (startY+1)*gridSize, gridSize*73+1, gridSize*10+1);
+    header_group.name = "Header";
+    header_group.labelExpression = " ";
+    formatGroup(header_group);
+
+    var y1 = (startY + 2) * gridSize;
+    var lbl1 = theView.createObject("note", gridSize*2, y1, labelWidth, height, true);
+    lbl1.text = "View Name:";
+    theLabels.push(lbl1);
+    var val1 = theView.createObject("note", labelWidth+gridSize*2, y1, gridSize*43, height, true);
+    val1.labelExpression = "$view{name}";
+    theNotes.push(val1);
+    
+    var lblV = theView.createObject("note", gridSize*56, y1, labelWidth, height, true);
+    lblV.text = "Version:";
+    theLabels.push(lblV);
+    var valV = theView.createObject("note", gridSize*66, y1, gridSize*7, height, true);
+    valV.labelExpression = "$view{property:Version}";
+    theNotes.push(valV);
+
+    var y2 = y1 + height;
+    var lblC = theView.createObject("note", gridSize*2, y2, labelWidth, height, true);
+    lblC.text = "Created by/on:";
+    theLabels.push(lblC);
+    var valC = theView.createObject("note", labelWidth+gridSize*2, y2, gridSize*25, height, true);
+    valC.labelExpression = "$view{property:Created_by} $view{property:Created_on}";
+    theNotes.push(valC);
+
+    var lblU = theView.createObject("note", labelWidth+gridSize*28, y2, labelWidth, height, true);
+    lblU.text = "Last edited by/on:";
+    theLabels.push(lblU);
+    var valU = theView.createObject("note", labelWidth*2+gridSize*28, y2, gridSize*25, height, true);
+    valU.labelExpression = "$view{property:Last_edited_by} $view{property:Last_updated}";
+    theNotes.push(valU);
+
+    var y3 = y2 + height;
+    var lblD = theView.createObject("note", gridSize*2, y3, labelWidth, height*2, true);
+    lblD.text = "Description:";
+    theLabels.push(lblD);
+    var valD = theView.createObject("note", labelWidth+gridSize*2, y3, gridSize*61, height*2, true);
+    valD.labelExpression = "$view{documentation}";
+    theNotes.push(valD);
+
+    formatLabels(theLabels);
+    formatNotes(theNotes);
+}
+
+function insertReferences(theView, theViewID, offset) {
+    var maxHeight = gridSize * 2 + linkHeight;
+    var link_group = theView.createObject("group", gridSize, (offset+1)*gridSize, (rowLimit*linkWidth)+(gridSize*5)+1, maxHeight+1);
+    link_group.name = "Links";
+    link_group.labelExpression = " ";
+    formatGroup(link_group);
+
+    var theLink = $("#"+theViewID).first();
+    var viewRef = theView.createViewReference(theLink, gridSize*2, (offset+2)*gridSize, linkWidth, linkHeight, true);
+    viewRef.textPosition = TEXT_POSITION.CENTER;
+    if (headerConfig.customColours) {
+        viewRef.fillColor = headerConfig.linkFillColour;
+        viewRef.fontColor = headerConfig.linkFontColour;
+        viewRef.opacity = parseInt(headerConfig.linkOpacity || 255);
+        viewRef.outlineOpacity = parseInt(headerConfig.linkOutlineOpacity || 255);
+    }
+    return (maxHeight+gridSize)/gridSize;
+}

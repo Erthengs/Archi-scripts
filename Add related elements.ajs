@@ -1,0 +1,96 @@
+﻿console.show();
+console.clear();
+
+var selectedElements = $(selection);
+
+if (selectedElements.length === 0) {
+    window.alert("Please select an element first.");
+    exit();
+}
+
+// Filter the selection to include ANY visual element connected to a concept
+var validElements = selectedElements.filter(function(o) { 
+    return o.concept != null && o.view != null; 
+});
+
+if (validElements.length === 0) {
+    window.alert("Please select a valid element directly in a diagram/view.");
+    exit();
+}
+
+// Process each selected element
+validElements.each(function(element) {
+    Add_Related_Elements(element);
+});
+
+function Add_Related_Elements(element) {
+    var coreConcept = element.concept;
+    var currentView = element.view;
+    
+    // Use the selected element's coordinates as the center point
+    var centerX = element.bounds ? element.bounds.x : 400;
+    var centerY = element.bounds ? element.bounds.y : 400;
+
+    var addedVisuals = {};
+    
+    // Map ALL existing elements currently in the view to avoid duplicates
+    $(currentView).find().each(function(visualObj) {
+        if (visualObj.concept) {
+            addedVisuals[visualObj.concept.id] = visualObj;
+        }
+    });
+
+    // Find all relationships (incoming and outgoing) connected to the core concept
+    var rels = $(coreConcept).outRels().add($(coreConcept).inRels());
+    var relatedConcepts = [];
+    
+    rels.each(function(rel) {
+        if (rel.source.id !== coreConcept.id && !addedVisuals[rel.source.id]) {
+            relatedConcepts.push(rel.source);
+            addedVisuals[rel.source.id] = true; // Use boolean as temporary placeholder
+        }
+        if (rel.target.id !== coreConcept.id && !addedVisuals[rel.target.id]) {
+            relatedConcepts.push(rel.target);
+            addedVisuals[rel.target.id] = true; // Use boolean as temporary placeholder
+        }
+    });
+
+    // Create a circular layout to position the related elements around the center
+    var radius = 200; 
+    var angleStep = relatedConcepts.length > 0 ? (2 * Math.PI) / relatedConcepts.length : 0;
+
+    relatedConcepts.forEach(function(relConcept, index) {
+        var angle = index * angleStep;
+        var rx = centerX + radius * Math.cos(angle);
+        var ry = centerY + radius * Math.sin(angle);
+        
+        // Add related concepts directly to the current view
+        var visObj = currentView.add(relConcept, rx, ry, 120, 55);
+        addedVisuals[relConcept.id] = visObj; // Replace boolean placeholder with actual visual object reference
+    });
+
+    // Draw the actual relationships connecting the visual elements together
+    rels.each(function(rel) {
+        var sourceVis = addedVisuals[rel.source.id];
+        var targetVis = addedVisuals[rel.target.id];
+        
+        // Ensure both elements exist visually on the canvas before adding the relationship
+        if (sourceVis && targetVis && sourceVis !== true && targetVis !== true) {
+            
+            // CORRECTED: Safely check if the relation already exists visually 
+            var existingRel = $(currentView).find().filter(function(v) {
+                // First ensure this visual object is a connection by checking for source and target
+                if (v.concept && v.source && v.target) {
+                    return v.concept.id === rel.id && v.source.id === sourceVis.id && v.target.id === targetVis.id;
+                }
+                return false;
+            });
+            
+            if (existingRel.length === 0) {
+                currentView.add(rel, sourceVis, targetVis);
+            }
+        }
+    });
+
+    console.log("Successfully added related elements for: " + (coreConcept.name || "Unnamed Element"));
+}
